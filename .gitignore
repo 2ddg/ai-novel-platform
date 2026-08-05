@@ -1,0 +1,20 @@
+.env
+uploads/
+data/chroma/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+# 大模型权重文件（体积大，应单独下载）
+models/bge-small-zh-v1.5/pytorch_model.bin
+models/bge-small-zh-v1.5/model.safetensors
+# 数据库文件
+*.db
+milvus_demo.db
+# IDE
+.vscode/
+.idea/
+# 日志
+*.log
+

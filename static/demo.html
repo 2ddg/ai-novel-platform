@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>知识库问答系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', sans-serif; background: #0a0a1a; color: #e2e8f0; height: 100vh; }
+        
+        .container { display: flex; height: 100vh; }
+        
+        /* 左侧面板 */
+        .sidebar { width: 280px; background: rgba(15,15,35,0.9); border-right: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; }
+        .sidebar-header { padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .sidebar-header h2 { font-size: 18px; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 15px; }
+        .section-title { font-size: 12px; color: #64748b; text-transform: uppercase; margin: 15px 0 8px; letter-spacing: 1px; }
+        .kb-item, .chat-item { padding: 12px; border-radius: 8px; margin-bottom: 8px; background: rgba(255,255,255,0.05); cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; }
+        .kb-item:hover, .chat-item:hover { background: rgba(102,126,234,0.2); }
+        .kb-item.active, .chat-item.active { background: rgba(102,126,234,0.3); border: 1px solid #667eea; }
+        .item-delete { color: #ef4444; cursor: pointer; font-size: 16px; opacity: 0.6; }
+        .item-delete:hover { opacity: 1; }
+        .new-chat-btn { width: 100%; padding: 10px; border: 1px solid rgba(102,126,234,0.5); border-radius: 8px; background: transparent; color: #667eea; cursor: pointer; margin-bottom: 10px; font-size: 13px; }
+        .new-chat-btn:hover { background: rgba(102,126,234,0.1); }
+        
+        /* 右侧聊天区 */
+        .chat-area { flex: 1; display: flex; flex-direction: column; }
+        .chat-header { padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); background: rgba(15,15,35,0.5); display: flex; justify-content: space-between; align-items: center; }
+        .chat-header h3 { font-size: 15px; color: #94a3b8; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 20px; }
+        
+        .message { margin-bottom: 16px; max-width: 80%; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user { margin-left: auto; }
+        .message.assistant { margin-right: auto; }
+        .message-content { padding: 12px 16px; border-radius: 12px; line-height: 1.7; font-size: 14px; }
+        .message.user .message-content { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+        .message.assistant .message-content { background: rgba(255,255,255,0.08); }
+        .message-sources { font-size: 11px; color: #64748b; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); }
+        
+        .chat-input { padding: 15px 20px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; gap: 10px; background: rgba(15,15,35,0.3); }
+        .chat-input input { flex: 1; padding: 12px 16px; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; background: rgba(255,255,255,0.05); color: #e2e8f0; font-size: 14px; }
+        .chat-input input:focus { outline: none; border-color: #667eea; }
+        .chat-input input::placeholder { color: #475569; }
+        .chat-input button { padding: 12px 20px; border: none; border-radius: 10px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; cursor: pointer; font-weight: 600; font-size: 14px; }
+        .chat-input button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .chat-input button:hover:not(:disabled) { box-shadow: 0 4px 15px rgba(102,126,234,0.4); }
+        
+        .upload-area { padding: 15px; border-top: 1px solid rgba(255,255,255,0.08); }
+        .upload-btn { width: 100%; padding: 10px; border: 2px dashed rgba(255,255,255,0.15); border-radius: 8px; background: transparent; color: #64748b; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+        .upload-btn:hover { border-color: #667eea; color: #667eea; background: rgba(102,126,234,0.05); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 左侧面板 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>知识库问答</h2>
+            </div>
+            <div class="sidebar-content">
+                <!-- 对话历史 -->
+                <div class="section-title">对话历史</div>
+                <button class="new-chat-btn" onclick="newChat()">+ 新建对话</button>
+                <div id="chat-list"></div>
+                
+                <!-- 知识库 -->
+                <div class="section-title">知识库</div>
+                <div id="kb-list">
+                    <div class="kb-item active" onclick="selectKB('default')">
+                        <span>默认知识库</span>
+                    </div>
+                </div>
+            </div>
+            <div class="upload-area">
+                <input type="file" id="file-input" multiple accept=".txt,.md,.pdf" style="display:none" onchange="uploadFiles(this.files)">
+                <button class="upload-btn" onclick="document.getElementById('file-input').click()">
+                    + 上传文档到知识库
+                </button>
+            </div>
+        </div>
+        
+        <!-- 右侧聊天区 -->
+        <div class="chat-area">
+            <div class="chat-header">
+                <h3 id="chat-title">新对话</h3>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                <div class="message assistant">
+                    <div class="message-content">
+                        你好！我是知识库问答助手。请先上传文档到知识库，然后就可以问我相关问题了。
+                    </div>
+                </div>
+            </div>
+            <div class="chat-input">
+                <input type="text" id="user-input" placeholder="输入你的问题..." onkeypress="if(event.key==='Enter')sendMessage()">
+                <button onclick="sendMessage()" id="send-btn">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BASE = 'http://localhost:8001';
+        let currentKB = 'default';
+        let currentChatId = null;
+        let chatHistory = {};  // {chatId: [{role, content, sources}]}
+        
+        // ===== 对话管理 =====
+        
+        // 新建对话
+        function newChat() {
+            currentChatId = 'chat-' + Date.now();
+            chatHistory[currentChatId] = [];
+            updateChatList();
+            clearMessages();
+            document.getElementById('chat-title').textContent = '新对话';
+        }
+        
+        // 选择对话
+        function selectChat(chatId) {
+            currentChatId = chatId;
+            updateChatList();
+            loadChatMessages(chatId);
+        }
+        
+        // 加载对话消息
+        function loadChatMessages(chatId) {
+            const container = document.getElementById('chat-messages');
+            container.innerHTML = '';
+            
+            const messages = chatHistory[chatId] || [];
+            messages.forEach(msg => {
+                addMessageToDOM(msg.role, msg.content, msg.sources, false);
+            });
+            
+            // 更新标题
+            if (messages.length > 0) {
+                const firstUserMsg = messages.find(m => m.role === 'user');
+                if (firstUserMsg) {
+                    document.getElementById('chat-title').textContent = firstUserMsg.content.substring(0, 30) + '...';
+                }
+            }
+        }
+        
+        // 更新对话列表
+        function updateChatList() {
+            const container = document.getElementById('chat-list');
+            container.innerHTML = '';
+            
+            Object.keys(chatHistory).reverse().forEach(chatId => {
+                const messages = chatHistory[chatId];
+                if (messages.length === 0) return;
+                
+                const firstMsg = messages.find(m => m.role === 'user');
+                const title = firstMsg ? firstMsg.content.substring(0, 25) + '...' : '空对话';
+                
+                const div = document.createElement('div');
+                div.className = 'chat-item' + (chatId === currentChatId ? ' active' : '');
+                div.innerHTML = `
+                    <span onclick="selectChat('${chatId}')">${title}</span>
+                    <span class="item-delete" onclick="event.stopPropagation(); deleteChat('${chatId}')">×</span>
+                `;
+                container.appendChild(div);
+            });
+        }
+        
+        // 删除对话
+        function deleteChat(chatId) {
+            delete chatHistory[chatId];
+            if (currentChatId === chatId) {
+                currentChatId = null;
+                clearMessages();
+            }
+            updateChatList();
+        }
+        
+        // ===== 消息管理 =====
+        
+        // 发送消息
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const question = input.value.trim();
+            if (!question) return;
+            
+            // 自动创建新对话
+            if (!currentChatId) {
+                newChat();
+            }
+            
+            input.value = '';
+            
+            // 显示用户消息
+            addMessageToDOM('user', question);
+            chatHistory[currentChatId].push({role: 'user', content: question});
+            
+            // 禁用按钮
+            const sendBtn = document.getElementById('send-btn');
+            sendBtn.disabled = true;
+            
+            // 显示思考动画
+            const thinkingId = addMessageToDOM('assistant', '<span class="typing"></span> 正在思考...', null, true);
+            
+            try {
+                const response = await fetch(BASE + '/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({question, collection_name: currentKB})
+                });
+                
+                const data = await response.json();
+                
+                // 移除思考动画，显示回答
+                removeMessage(thinkingId);
+                addMessageToDOM('assistant', data.answer, data.sources);
+                
+                // 保存到历史
+                chatHistory[currentChatId].push({
+                    role: 'assistant', 
+                    content: data.answer, 
+                    sources: data.sources
+                });
+                
+                // 更新标题
+                document.getElementById('chat-title').textContent = question.substring(0, 30) + '...';
+                
+            } catch(e) {
+                removeMessage(thinkingId);
+                addMessageToDOM('assistant', '请求失败: ' + e.message);
+            }
+            
+            sendBtn.disabled = false;
+        }
+        
+        // 添加消息到DOM
+        function addMessageToDOM(role, content, sources, isTemporary) {
+            const container = document.getElementById('chat-messages');
+            const id = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.id = id;
+            if (isTemporary) div.dataset.temporary = 'true';
+            
+            let html = `<div class="message-content">${content}</div>`;
+            if (sources && sources.length > 0) {
+                html += '<div class="message-sources">引用来源: ';
+                html += sources.map(s => `${s.filename} (${(s.similarity*100).toFixed(0)}%)`).join(', ');
+                html += '</div>';
+            }
+            div.innerHTML = html;
+            
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+        
+        // 移除消息
+        function removeMessage(id) {
+            const div = document.getElementById(id);
+            if (div) div.remove();
+        }
+        
+        // 清空消息
+        function clearMessages() {
+            document.getElementById('chat-messages').innerHTML = '';
+        }
+        
+        // ===== 知识库管理 =====
+        
+        function selectKB(name) {
+            currentKB = name;
+            document.querySelectorAll('.kb-item').forEach(el => el.classList.remove('active'));
+            event.target.closest('.kb-item').classList.add('active');
+        }
+        
+        async function uploadFiles(files) {
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const response = await fetch(BASE + '/api/knowledge/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                alert(`上传成功！共 ${data.chunks_count} 个文档片段`);
+                loadKnowledgeBases();
+            } catch(e) {
+                alert('上传失败: ' + e.message);
+            }
+        }
+        
+        async function loadKnowledgeBases() {
+            try {
+                const response = await fetch(BASE + '/api/knowledge/list');
+                const data = await response.json();
+                
+                const container = document.getElementById('kb-list');
+                container.innerHTML = '';
+                
+                const collections = data.collections || [];
+                if (collections.length === 0) {
+                    container.innerHTML = '<div class="kb-item active" onclick="selectKB(\'default\')"><span>默认知识库</span></div>';
+                } else {
+                    collections.forEach(name => {
+                        const div = document.createElement('div');
+                        div.className = 'kb-item' + (name === currentKB ? ' active' : '');
+                        div.innerHTML = `<span onclick="selectKB('${name}')">${name}</span><span class="item-delete" onclick="event.stopPropagation(); deleteKB('${name}')">×</span>`;
+                        container.appendChild(div);
+                    });
+                }
+            } catch(e) {
+                console.error('加载知识库失败:', e);
+            }
+        }
+        
+        async function deleteKB(name) {
+            if (!confirm(`确定删除知识库 "${name}" 吗？`)) return;
+            
+            try {
+                await fetch(BASE + `/api/knowledge/${name}`, {method: 'DELETE'});
+                if (currentKB === name) currentKB = 'default';
+                loadKnowledgeBases();
+            } catch(e) {
+                alert('删除失败: ' + e.message);
+            }
+        }
+        
+        // 初始化
+        newChat();
+        loadKnowledgeBases();
+    </script>
+</body>
+</html>
