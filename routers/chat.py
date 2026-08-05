@@ -1,4 +1,4 @@
-"""对话路由：关联知识库问答 / 流式问答 / 历史记录 CRUD"""
+"""对话路由：关联知识库问答 / 流式问答 / 历史记录 CRUD / RAG评估 / 安全审计"""
 import json
 import logging
 from typing import List, Optional
@@ -14,6 +14,9 @@ from models.knowledge import KnowledgeBase
 from models.chat import ChatHistory
 from models.schemas import ChatRequest, ChatResponse, ChatHistoryResponse
 from core.rag_engine import RAGEngine
+from core.rag_evaluation import RAGEvaluator
+from core.observability import tracer, SecurityAuditor
+from core.llm_client import COST_AWARE_MODELS, get_model_for_tier, select_tier_by_prompt_length
 
 router = APIRouter(prefix="/api/chat", tags=["对话"])
 
@@ -149,3 +152,93 @@ def clear_history(
     ).delete()
     db.commit()
     return {"status": "success", "message": f"已清空 {deleted} 条记录"}
+
+
+# ============ RAG评估 ============
+
+@router.post("/evaluate")
+async def evaluate_rag(req: dict, user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """评估RAG输出质量"""
+    question = req.get("question", "")
+    answer = req.get("answer", "")
+    context = req.get("context", "")
+    ground_truth = req.get("ground_truth")
+
+    if not question or not answer:
+        raise HTTPException(status_code=400, detail="缺少question或answer")
+
+    evaluator = RAGEvaluator()
+    metrics = await evaluator.evaluate_single(question, answer, context, ground_truth)
+    return metrics.to_dict()
+
+
+@router.post("/evaluate/batch")
+async def evaluate_batch(req: dict, user: User = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """批量评估RAG输出"""
+    test_cases = req.get("test_cases", [])
+    if not test_cases:
+        raise HTTPException(status_code=400, detail="缺少test_cases")
+
+    evaluator = RAGEvaluator()
+    result = await evaluator.evaluate_batch(test_cases)
+    return result
+
+
+# ============ 可观测性 ============
+
+@router.get("/observability/traces")
+def get_traces(limit: int = Query(50, ge=1, le=200),
+               user: User = Depends(get_current_user)):
+    """获取请求追踪列表"""
+    return {"traces": tracer.get_recent_traces(limit)}
+
+
+@router.get("/observability/traces/{trace_id}")
+def get_trace(trace_id: str, user: User = Depends(get_current_user)):
+    """获取单个请求追踪详情"""
+    trace = tracer.get_trace(trace_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="追踪不存在")
+    return trace
+
+
+@router.get("/observability/stats")
+def get_observability_stats(user: User = Depends(get_current_user)):
+    """获取可观测性统计"""
+    return tracer.get_stats()
+
+
+# ============ 安全审计 ============
+
+@router.post("/security/audit")
+def security_audit(req: dict, user: User = Depends(get_current_user)):
+    """安全审计：检查prompt注入和敏感信息"""
+    text = req.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="缺少text")
+    return SecurityAuditor.full_audit(text)
+
+
+# ============ 成本感知路由 ============
+
+@router.get("/cost/models")
+def get_cost_models(user: User = Depends(get_current_user)):
+    """获取成本感知路由配置"""
+    return {"models": COST_AWARE_MODELS, "tiers": list(COST_AWARE_MODELS.keys())}
+
+
+@router.post("/cost/estimate")
+def estimate_cost(req: dict, user: User = Depends(get_current_user)):
+    """预估任务层级和模型选择"""
+    prompt = req.get("prompt", "")
+    max_tokens = req.get("max_tokens", 1000)
+    tier = select_tier_by_prompt_length(prompt, max_tokens)
+    model = get_model_for_tier(tier)
+    return {
+        "tier": tier,
+        "model": model,
+        "prompt_length": len(prompt),
+        "estimated_max_tokens": max_tokens,
+    }

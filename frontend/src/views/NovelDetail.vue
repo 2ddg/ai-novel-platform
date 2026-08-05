@@ -60,6 +60,12 @@
           <el-table-column prop="name" label="角色名" width="120" />
           <el-table-column prop="personality" label="性格" show-overflow-tooltip />
           <el-table-column prop="background" label="背景" show-overflow-tooltip />
+          <el-table-column label="当前状态" width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span v-if="row.current_state">{{ formatCharState(row.current_state) }}</span>
+              <span v-else style="color:#909399">暂无</span>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="150">
             <template #default="{ row }">
               <el-button size="small" @click="onEditChar(row)">编辑</el-button>
@@ -132,6 +138,15 @@
           <el-table-column prop="chapter_num" label="第X章" width="80" />
           <el-table-column prop="title" label="标题" width="150" />
           <el-table-column prop="summary" label="摘要" show-overflow-tooltip />
+          <el-table-column label="审计" width="120" @click.stop>
+            <template #default="{ row }">
+              <el-tag v-if="row.audit_score !== null && row.audit_score !== undefined" :type="row.audit_score >= 70 ? 'success' : 'warning'" size="small">
+                {{ row.audit_score }}/100
+              </el-tag>
+              <span v-else style="color: #999; font-size: 12px">未审计</span>
+              <el-tag v-if="row.rewrite_count > 0" size="small" type="danger" style="margin-left: 4px">重写{{ row.rewrite_count }}次</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="200" @click.stop>
             <template #default="{ row }">
               <el-button size="small" type="primary" @click="onOpenChapter(row)">继续写作</el-button>
@@ -257,6 +272,73 @@
         </div>
       </el-tab-pane>
 
+      <!-- 伏笔追踪 -->
+      <el-tab-pane label="伏笔" name="foreshadowing">
+        <div class="tab-header">
+          <span style="color: #909399">共 {{ foreshadowings.length }} 条伏笔（{{ pendingForeshadowings }} 待回收 / {{ resolvedForeshadowings }} 已回收）</span>
+          <div>
+            <el-button size="small" type="warning" :loading="scanningFs" @click="showFsScanDialog = true">AI扫描章节伏笔</el-button>
+            <el-button size="small" type="primary" @click="onAddForeshadowing">添加伏笔</el-button>
+            <el-button v-if="fsBatchSelected.length" size="small" type="success" @click="onBatchResolveFs">批量标记回收 ({{ fsBatchSelected.length }})</el-button>
+            <el-button v-if="fsBatchSelected.length" size="small" type="danger" @click="onBatchDeleteFs">批量删除 ({{ fsBatchSelected.length }})</el-button>
+            <el-button v-if="fsBatchSelected.length" size="small" @click="fsBatchSelected = []">取消选择</el-button>
+          </div>
+        </div>
+        <el-table :data="foreshadowings" style="width: 100%" @selection-change="fsBatchSelected = $event">
+          <el-table-column type="selection" width="40" />
+          <el-table-column prop="chapter_planted" label="埋设章" width="80" />
+          <el-table-column prop="content" label="伏笔内容" show-overflow-tooltip />
+          <el-table-column label="优先级" width="100">
+            <template #default="{ row }">
+              <el-tag :type="row.priority === 'high' ? 'danger' : row.priority === 'medium' ? 'warning' : 'info'" size="small">
+                {{ row.priority === 'high' ? '高' : row.priority === 'medium' ? '中' : '低' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'resolved' ? 'success' : row.status === 'abandoned' ? 'info' : 'warning'" size="small">
+                {{ row.status === 'resolved' ? '已回收' : row.status === 'abandoned' ? '已放弃' : '待回收' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="chapter_resolved" label="回收章" width="80" />
+          <el-table-column label="操作" width="200">
+            <template #default="{ row }">
+              <el-button size="small" @click="onEditForeshadowing(row)">编辑</el-button>
+              <el-button v-if="row.status === 'pending'" size="small" type="success" @click="onResolveForeshadowing(row)">标记回收</el-button>
+              <el-button size="small" type="danger" @click="onDeleteForeshadowing(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <!-- 时间线 -->
+      <el-tab-pane label="时间线" name="timeline">
+        <div class="tab-header">
+          <span style="color: #909399">共 {{ timelines.length }} 条事件</span>
+          <div>
+            <el-button size="small" type="warning" :loading="scanningTl" @click="showTlScanDialog = true">AI扫描章节事件</el-button>
+            <el-button size="small" type="primary" @click="onAddTimeline">添加事件</el-button>
+            <el-button v-if="tlBatchSelected.length" size="small" type="danger" @click="onBatchDeleteTl">批量删除 ({{ tlBatchSelected.length }})</el-button>
+            <el-button v-if="tlBatchSelected.length" size="small" @click="tlBatchSelected = []">取消选择</el-button>
+          </div>
+        </div>
+        <el-table :data="timelines" style="width: 100%" @selection-change="tlBatchSelected = $event">
+          <el-table-column type="selection" width="40" />
+          <el-table-column prop="chapter_num" label="章节" width="80" />
+          <el-table-column prop="time_label" label="时间标记" width="120" />
+          <el-table-column prop="event" label="事件描述" show-overflow-tooltip />
+          <el-table-column label="操作" width="180">
+            <template #default="{ row }">
+              <el-button size="small" @click="onEditTimeline(row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="onDeleteTimeline(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!timelines.length" description="暂无时间线事件，AI会在生成章节后自动提取" />
+      </el-tab-pane>
+
       <!-- 全文 + AI修改意见 -->
       <el-tab-pane label="全文" name="fulltext">
         <div class="tab-header">
@@ -304,6 +386,14 @@
           <el-table-column prop="content" label="内容预览" show-overflow-tooltip>
             <template #default="{ row }">
               {{ (row.content || '').slice(0, 60) }}{{ (row.content || '').length > 60 ? '...' : '' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="审计" width="100" @click.stop>
+            <template #default="{ row }">
+              <el-tag v-if="row.audit_score !== null && row.audit_score !== undefined" :type="row.audit_score >= 70 ? 'success' : 'warning'" size="small">
+                {{ row.audit_score }}
+              </el-tag>
+              <span v-else style="color: #999; font-size: 12px">-</span>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="120" @click.stop>
@@ -414,6 +504,90 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 伏笔编辑对话框 -->
+    <el-dialog v-model="showFsEditDialog" :title="fsEditData.id ? '编辑伏笔' : '添加伏笔'" width="500px">
+      <el-form :model="fsEditData" label-width="80px">
+        <el-form-item label="埋设章节">
+          <el-input-number v-model="fsEditData.chapter_planted" :min="1" />
+        </el-form-item>
+        <el-form-item label="伏笔内容">
+          <el-input v-model="fsEditData.content" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="优先级">
+          <el-select v-model="fsEditData.priority">
+            <el-option label="高" value="high" />
+            <el-option label="中" value="medium" />
+            <el-option label="低" value="low" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="fsEditData.status">
+            <el-option label="待回收" value="pending" />
+            <el-option label="已回收" value="resolved" />
+            <el-option label="已放弃" value="abandoned" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="fsEditData.status === 'resolved'" label="回收章节">
+          <el-input-number v-model="fsEditData.chapter_resolved" :min="1" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showFsEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="onSaveForeshadowing">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 伏笔扫描对话框 -->
+    <el-dialog v-model="showFsScanDialog" title="AI扫描章节伏笔" width="500px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
+        选择要扫描的章节，AI将自动提取新埋设的伏笔，并检查是否回收了旧伏笔。
+      </el-alert>
+      <el-table :data="chapters" @selection-change="fsScanSelected = $event">
+        <el-table-column type="selection" width="50" />
+        <el-table-column prop="chapter_num" label="章节" width="80" />
+        <el-table-column prop="title" label="标题" />
+      </el-table>
+      <template #footer>
+        <el-button @click="showFsScanDialog = false">取消</el-button>
+        <el-button type="primary" :loading="scanningFs" @click="onScanForeshadowings">开始扫描</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 时间线编辑对话框 -->
+    <el-dialog v-model="showTlEditDialog" :title="tlEditData.id ? '编辑事件' : '添加事件'" width="500px">
+      <el-form :model="tlEditData" label-width="80px">
+        <el-form-item label="章节号">
+          <el-input-number v-model="tlEditData.chapter_num" :min="1" />
+        </el-form-item>
+        <el-form-item label="事件">
+          <el-input v-model="tlEditData.event" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="时间标记">
+          <el-input v-model="tlEditData.time_label" placeholder="如：当夜、次日清晨" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showTlEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="onSaveTimeline">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 时间线扫描对话框 -->
+    <el-dialog v-model="showTlScanDialog" title="AI扫描章节事件" width="500px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
+        选择要扫描的章节，AI将自动提取重大事件。
+      </el-alert>
+      <el-table :data="chapters" @selection-change="tlScanSelected = $event">
+        <el-table-column type="selection" width="50" />
+        <el-table-column prop="chapter_num" label="章节" width="80" />
+        <el-table-column prop="title" label="标题" />
+      </el-table>
+      <template #footer>
+        <el-button @click="showTlScanDialog = false">取消</el-button>
+        <el-button type="primary" :loading="scanningTl" @click="onScanTimelines">开始扫描</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -427,6 +601,10 @@ import {
   generateOutline, listChapters, getChapter, updateChapter, deleteChapter,
   generateChapter, getMemory, updateMemory, reviewChapters, regenerateMemory,
   extractCharacters, regenerateOutline, generateGlobalMemory,
+  listForeshadowings, createForeshadowing, updateForeshadowing, deleteForeshadowing, scanForeshadowings,
+  batchDeleteForeshadowings, batchUpdateForeshadowings,
+  listTimelines, createTimeline, updateTimeline, deleteTimeline, scanTimelines,
+  batchDeleteTimelines,
 } from '../api/novel'
 import { DEFAULT_STYLE_GUIDE } from '../config'
 
@@ -441,6 +619,8 @@ const streaming = ref(false)
 const savingMemory = ref(false)
 const savingChapter = ref(false)
 const reviewing = ref(false)
+const scanningFs = ref(false)
+const scanningTl = ref(false)
 
 const novel = ref(null)
 const activeTab = ref('info')
@@ -452,6 +632,25 @@ const expandedMemories = ref([])
 const characters = ref([])
 const chapters = ref([])
 const writingContent = ref('')
+const foreshadowings = ref([])
+const timelines = ref([])
+
+const pendingForeshadowings = computed(() => foreshadowings.value.filter(f => f.status === 'pending').length)
+const resolvedForeshadowings = computed(() => foreshadowings.value.filter(f => f.status === 'resolved').length)
+
+// 伏笔编辑
+const showFsEditDialog = ref(false)
+const fsEditData = ref({})
+const showFsScanDialog = ref(false)
+const fsScanSelected = ref([])
+
+// 时间线编辑
+const showTlEditDialog = ref(false)
+const tlEditData = ref({})
+const showTlScanDialog = ref(false)
+const tlScanSelected = ref([])
+const fsBatchSelected = ref([])
+const tlBatchSelected = ref([])
 
 // AI审阅
 const showReviewDialog = ref(false)
@@ -487,17 +686,21 @@ const writeForm = ref({ chapter_num: 1, title: '', chapter_outline: '' })
 async function fetchData() {
   loading.value = true
   try {
-    const [n, chars, chs, mem] = await Promise.all([
+    const [n, chars, chs, mem, fs, tl] = await Promise.all([
       getNovel(novelId.value),
       listCharacters(novelId.value),
       listChapters(novelId.value),
       getMemory(novelId.value).catch(() => ({ chapters: [], global: '' })),
+      listForeshadowings(novelId.value).catch(() => []),
+      listTimelines(novelId.value).catch(() => []),
     ])
     novel.value = n
     editForm.value = { title: n.title, genre: n.genre, description: n.description, style_guide: n.style_guide || '' }
     outlineText.value = n.outline || ''
-    characters.value = chars
-    chapters.value = chs
+    characters.value = Array.isArray(chars) ? chars : (chars?.data || [])
+    chapters.value = Array.isArray(chs) ? chs : (chs?.data || [])
+    foreshadowings.value = Array.isArray(fs) ? fs : (fs?.data || [])
+    timelines.value = Array.isArray(tl) ? tl : (tl?.data || [])
     // 分章节记忆
     memoryGlobal.value = mem.global || ''
     memoryChapters.value = mem.chapters || []
@@ -511,6 +714,21 @@ async function fetchData() {
 
 function useDefaultStyle() {
   editForm.value.style_guide = DEFAULT_STYLE_GUIDE
+}
+
+function formatCharState(stateStr) {
+  try {
+    const s = JSON.parse(stateStr)
+    const parts = []
+    if (s.position) parts.push(`位置:${s.position}`)
+    if (s.power) parts.push(`实力:${s.power}`)
+    if (s.mood) parts.push(`心情:${s.mood}`)
+    if (s.items) parts.push(`持有:${s.items}`)
+    if (s.knowledge) parts.push(`已知:${s.knowledge}`)
+    return parts.length ? parts.join('，') : '暂无'
+  } catch {
+    return stateStr
+  }
 }
 
 async function onSaveInfo() {
@@ -653,7 +871,8 @@ async function onExtractCharacters() {
     } else {
       ElMessage.success('扫描完成，没有发现新角色')
     }
-    characters.value = await listCharacters(novelId.value)
+    const charsRes = await listCharacters(novelId.value)
+    characters.value = Array.isArray(charsRes) ? charsRes : (charsRes?.data || [])
   } finally {
     extractingChars.value = false
   }
@@ -758,12 +977,47 @@ async function onStreamChapter() {
             const data = JSON.parse(dataStr)
             if (data.type === 'chunk') {
               writingContent.value += data.data
+            } else if (data.type === 'audit_start') {
+              writingContent.value += '\n\n--- 正在审计章节质量... ---\n'
+            } else if (data.type === 'audit_done') {
+              const audit = data.data
+              writingContent.value += `\n审计完成：总分 ${audit.score}/100\n`
+              if (audit.dimensions) {
+                for (const [k, v] of Object.entries(audit.dimensions)) {
+                  writingContent.value += `  ${k}: ${v}/10\n`
+                }
+              }
+              if (audit.issues && audit.issues.length) {
+                writingContent.value += '问题：\n'
+                audit.issues.forEach(i => { writingContent.value += `  - ${i}\n` })
+              }
+              if (audit.ai_tics && audit.ai_tics.items && audit.ai_tics.items.length) {
+                writingContent.value += '\nAI腔检测：\n'
+                audit.ai_tics.items.forEach(item => {
+                  const flag = item.exceeded ? '⚠' : '✓'
+                  writingContent.value += `  ${flag} ${item.suggestion}（${item.count}次）\n`
+                })
+              }
+            } else if (data.type === 'rewrite_start') {
+              writingContent.value += `\n\n--- ${data.data} ---\n`
+            } else if (data.type === 'rewrite_done') {
+              writingContent.value = data.data.content
+              const audit = data.data.audit
+              writingContent.value += `\n\n--- 重写后审计：${audit.score}/100 ---\n`
             } else if (data.type === 'error') {
               ElMessage.error(data.data)
               streaming.value = false
               return
             } else if (data.type === 'done') {
-              writingContent.value += `\n\n---\n章节已保存：${data.data.chapter_id}`
+              const d = data.data
+              writingContent.value += `\n\n--- 章节已保存（ID: ${d.chapter_id}）---\n`
+              if (d.audit_score !== undefined) {
+                writingContent.value += `审计分数：${d.audit_score}/100`
+                if (d.rewrite_count > 0) {
+                  writingContent.value += `（已自动重写${d.rewrite_count}次）`
+                }
+                writingContent.value += '\n'
+              }
             }
           } catch {
             writingContent.value += dataStr
@@ -845,6 +1099,164 @@ async function onSaveChar() {
     charForm.value = { name: '', personality: '', background: '' }
     fetchData()
   } catch { /* handled */ }
+}
+
+// ============ 伏笔管理 ============
+async function loadForeshadowings() {
+  try {
+    const res = await listForeshadowings(novelId.value)
+    console.log('loadForeshadowings res:', res)
+    foreshadowings.value = Array.isArray(res) ? res : (res?.data || [])
+  } catch (e) { console.error('加载伏笔列表失败:', e) }
+}
+
+function onAddForeshadowing() {
+  fsEditData.value = { chapter_planted: 1, content: '', priority: 'medium', status: 'pending' }
+  showFsEditDialog.value = true
+}
+
+function onEditForeshadowing(row) {
+  fsEditData.value = { ...row }
+  showFsEditDialog.value = true
+}
+
+async function onSaveForeshadowing() {
+  try {
+    if (fsEditData.value.id) {
+      await updateForeshadowing(novelId.value, fsEditData.value.id, fsEditData.value)
+    } else {
+      await createForeshadowing(novelId.value, fsEditData.value)
+    }
+    ElMessage.success('保存成功')
+    showFsEditDialog.value = false
+    loadForeshadowings()
+  } catch { /* handled */ }
+}
+
+async function onDeleteForeshadowing(row) {
+  try {
+    await ElMessageBox.confirm('确定删除该伏笔？', '提示', { type: 'warning' })
+    await deleteForeshadowing(novelId.value, row.id)
+    ElMessage.success('已删除')
+    loadForeshadowings()
+  } catch { /* cancelled */ }
+}
+
+async function onResolveForeshadowing(row) {
+  try {
+    await updateForeshadowing(novelId.value, row.id, { status: 'resolved', chapter_resolved: chapters.value.length })
+    ElMessage.success('已标记为回收')
+    loadForeshadowings()
+  } catch { /* handled */ }
+}
+
+async function onBatchDeleteFs() {
+  if (!fsBatchSelected.value.length) return
+  try {
+    await ElMessageBox.confirm(`确定删除选中的 ${fsBatchSelected.value.length} 条伏笔？`, '提示', { type: 'warning' })
+    const ids = fsBatchSelected.value.map(c => c.id)
+    await batchDeleteForeshadowings(novelId.value, ids)
+    ElMessage.success(`已删除 ${ids.length} 条伏笔`)
+    fsBatchSelected.value = []
+    loadForeshadowings()
+  } catch { /* cancelled */ }
+}
+
+async function onBatchResolveFs() {
+  if (!fsBatchSelected.value.length) return
+  try {
+    await ElMessageBox.confirm(`确定将选中的 ${fsBatchSelected.value.length} 条伏笔标记为已回收？`, '提示', { type: 'warning' })
+    const ids = fsBatchSelected.value.map(c => c.id)
+    await batchUpdateForeshadowings(novelId.value, ids, { status: 'resolved', chapter_resolved: chapters.value.length })
+    ElMessage.success(`已标记 ${ids.length} 条伏笔为回收`)
+    fsBatchSelected.value = []
+    loadForeshadowings()
+  } catch { /* cancelled */ }
+}
+
+async function onScanForeshadowings() {
+  if (!fsScanSelected.value.length) {
+    ElMessage.warning('请选择要扫描的章节')
+    return
+  }
+  scanningFs.value = true
+  try {
+    const res = await scanForeshadowings(novelId.value, fsScanSelected.value.map(c => c.id))
+    ElMessage.success(`扫描完成：新发现 ${res.new_count} 条，回收 ${res.resolved_count} 条`)
+    showFsScanDialog.value = false
+    fsScanSelected.value = []
+    loadForeshadowings()
+  } catch (e) { console.error('扫描伏笔失败:', e) }
+  finally { scanningFs.value = false }
+}
+
+// ============ 时间线管理 ============
+async function loadTimelines() {
+  try {
+    const res = await listTimelines(novelId.value)
+    console.log('loadTimelines res:', res)
+    timelines.value = Array.isArray(res) ? res : (res?.data || [])
+  } catch (e) { console.error('加载时间线失败:', e) }
+}
+
+function onAddTimeline() {
+  tlEditData.value = { chapter_num: chapters.value.length || 1, event: '', time_label: '' }
+  showTlEditDialog.value = true
+}
+
+function onEditTimeline(row) {
+  tlEditData.value = { ...row }
+  showTlEditDialog.value = true
+}
+
+async function onSaveTimeline() {
+  try {
+    if (tlEditData.value.id) {
+      await updateTimeline(novelId.value, tlEditData.value.id, tlEditData.value)
+    } else {
+      await createTimeline(novelId.value, tlEditData.value)
+    }
+    ElMessage.success('保存成功')
+    showTlEditDialog.value = false
+    loadTimelines()
+  } catch { /* handled */ }
+}
+
+async function onDeleteTimeline(row) {
+  try {
+    await ElMessageBox.confirm('确定删除该事件？', '提示', { type: 'warning' })
+    await deleteTimeline(novelId.value, row.id)
+    ElMessage.success('已删除')
+    loadTimelines()
+  } catch { /* cancelled */ }
+}
+
+async function onBatchDeleteTl() {
+  if (!tlBatchSelected.value.length) return
+  try {
+    await ElMessageBox.confirm(`确定删除选中的 ${tlBatchSelected.value.length} 条事件？`, '提示', { type: 'warning' })
+    const ids = tlBatchSelected.value.map(c => c.id)
+    await batchDeleteTimelines(novelId.value, ids)
+    ElMessage.success(`已删除 ${ids.length} 条事件`)
+    tlBatchSelected.value = []
+    loadTimelines()
+  } catch { /* cancelled */ }
+}
+
+async function onScanTimelines() {
+  if (!tlScanSelected.value.length) {
+    ElMessage.warning('请选择要扫描的章节')
+    return
+  }
+  scanningTl.value = true
+  try {
+    const res = await scanTimelines(novelId.value, tlScanSelected.value.map(c => c.id))
+    ElMessage.success(`扫描完成：新发现 ${res.new_count} 条事件`)
+    showTlScanDialog.value = false
+    tlScanSelected.value = []
+    loadTimelines()
+  } catch (e) { console.error('扫描时间线失败:', e) }
+  finally { scanningTl.value = false }
 }
 
 onMounted(fetchData)

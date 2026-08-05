@@ -8,6 +8,17 @@ ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 LLM_MODEL = "glm-4-flash"
 LLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
+# 成本感知路由：按任务复杂度选择模型
+# glm-4-flash: 便宜快速，适合简单任务（提取、分类、摘要）
+# glm-4: 强力但贵，适合复杂任务（正文生成、大纲规划）
+# glm-4-air: 中间档，适合中等任务（审计、改写）
+COST_AWARE_MODELS = {
+    "cheap": "glm-4-flash",      # 简单任务：角色提取、情绪分析、伏笔扫描
+    "medium": "glm-4-air",       # 中等任务：章节审计、文风分析
+    "premium": "glm-4",          # 复杂任务：正文生成、大纲规划
+}
+DEFAULT_TIER = "cheap"
+
 # Embedding配置（BGE-small-zh 本地模型，约 100MB，512 维）
 EMBEDDING_MODEL_PATH = "./models/bge-small-zh-v1.5"
 EMBEDDING_DIM = 512

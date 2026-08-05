@@ -67,3 +67,41 @@ export const regenerateOutline = (novelId) =>
 // AI生成全局记忆
 export const generateGlobalMemory = (novelId) =>
   request.post(`/novel/${novelId}/generate-global-memory`, {}, { timeout: 300000 })
+
+// 伏笔管理
+export const listForeshadowings = (novelId) => request.get(`/novel/${novelId}/foreshadowings`)
+export const createForeshadowing = (novelId, data) => request.post(`/novel/${novelId}/foreshadowings`, data)
+export const updateForeshadowing = (novelId, fsId, data) => request.put(`/novel/${novelId}/foreshadowings/${fsId}`, data)
+export const deleteForeshadowing = (novelId, fsId) => request.delete(`/novel/${novelId}/foreshadowings/${fsId}`)
+export const scanForeshadowings = (novelId, chapterIds) =>
+  request.post(`/novel/${novelId}/foreshadowings/scan`, { chapter_ids: chapterIds }, { timeout: 300000 })
+export const batchDeleteForeshadowings = (novelId, ids) =>
+  request.post(`/novel/${novelId}/foreshadowings/batch-delete`, { ids })
+export const batchUpdateForeshadowings = (novelId, ids, data) =>
+  request.post(`/novel/${novelId}/foreshadowings/batch-update`, { ids, data })
+
+// 时间线管理
+export const listTimelines = (novelId) => request.get(`/novel/${novelId}/timelines`)
+export const createTimeline = (novelId, data) => request.post(`/novel/${novelId}/timelines`, data)
+export const updateTimeline = (novelId, tlId, data) => request.put(`/novel/${novelId}/timelines/${tlId}`, data)
+export const deleteTimeline = (novelId, tlId) => request.delete(`/novel/${novelId}/timelines/${tlId}`)
+export const scanTimelines = (novelId, chapterIds) =>
+  request.post(`/novel/${novelId}/timelines/scan`, { chapter_ids: chapterIds }, { timeout: 300000 })
+export const batchDeleteTimelines = (novelId, ids) =>
+  request.post(`/novel/${novelId}/timelines/batch-delete`, { ids })
+
+// 文风分析
+export const analyzeStyle = (novelId, referenceText) =>
+  request.post(`/novel/${novelId}/style/analyze`, { reference_text: referenceText }, { timeout: 120000 })
+
+// 版本归档
+export const listVersions = (novelId) => request.get(`/novel/${novelId}/versions`)
+export const createVersion = (novelId, data) => request.post(`/novel/${novelId}/versions`, data)
+export const getVersion = (novelId, versionId) => request.get(`/novel/${novelId}/versions/${versionId}`)
+export const restoreVersion = (novelId, versionId) => request.post(`/novel/${novelId}/versions/${versionId}/restore`)
+export const deleteVersion = (novelId, versionId) => request.delete(`/novel/${novelId}/versions/${versionId}`)
+
+// 分卷规划 + 情绪曲线
+export const planVolumes = (novelId, data) => request.post(`/novel/${novelId}/volumes/plan`, data, { timeout: 120000 })
+export const getVolumePlan = (novelId) => request.get(`/novel/${novelId}/volumes`)
+export const analyzeEmotionCurve = (novelId) => request.post(`/novel/${novelId}/emotion-curve`, {}, { timeout: 300000 })

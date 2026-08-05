@@ -72,6 +72,68 @@ def init_db():
     except Exception as e:
         logger.warning(f"迁移 memories 表失败（可能列已存在）：{e}")
 
+    # 迁移：为 chapters 表添加审计字段
+    try:
+        with engine.connect() as conn:
+            for col_def in [
+                ("audit_score", "INT NULL"),
+                ("audit_result", "TEXT NULL"),
+                ("rewrite_count", "INT DEFAULT 0"),
+            ]:
+                col_name, col_type = col_def
+                result = conn.execute(text(
+                    "SELECT COUNT(*) FROM information_schema.columns "
+                    "WHERE table_schema = :db AND table_name = 'chapters' AND column_name = :col"
+                ), {"db": MYSQL_DATABASE, "col": col_name})
+                if result.scalar() == 0:
+                    conn.execute(text(f"ALTER TABLE chapters ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+                    logger.info(f"已为 chapters 表添加 {col_name} 列")
+    except Exception as e:
+        logger.warning(f"迁移 chapters 表失败（可能列已存在）：{e}")
+
+    # 迁移：为 characters 表添加 current_state 字段
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = :db AND table_name = 'characters' AND column_name = 'current_state'"
+            ), {"db": MYSQL_DATABASE})
+            if result.scalar() == 0:
+                conn.execute(text("ALTER TABLE characters ADD COLUMN current_state TEXT NULL"))
+                conn.commit()
+                logger.info("已为 characters 表添加 current_state 列")
+    except Exception as e:
+        logger.warning(f"迁移 characters 表失败：{e}")
+
+    # 迁移：为 novels 表添加 style_data 字段
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = :db AND table_name = 'novels' AND column_name = 'style_data'"
+            ), {"db": MYSQL_DATABASE})
+            if result.scalar() == 0:
+                conn.execute(text("ALTER TABLE novels ADD COLUMN style_data TEXT NULL"))
+                conn.commit()
+                logger.info("已为 novels 表添加 style_data 列")
+    except Exception as e:
+        logger.warning(f"迁移 novels 表失败：{e}")
+
+    # 迁移：为 novels 表添加 volume_plan 字段
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = :db AND table_name = 'novels' AND column_name = 'volume_plan'"
+            ), {"db": MYSQL_DATABASE})
+            if result.scalar() == 0:
+                conn.execute(text("ALTER TABLE novels ADD COLUMN volume_plan TEXT NULL"))
+                conn.commit()
+                logger.info("已为 novels 表添加 volume_plan 列")
+    except Exception as e:
+        logger.warning(f"迁移 novels 表 volume_plan 失败：{e}")
+
     logger.info("数据表已同步")
 
 

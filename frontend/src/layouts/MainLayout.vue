@@ -4,7 +4,7 @@
     <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
       <div class="logo">
         <el-icon size="28" color="#fff"><Reading /></el-icon>
-        <span v-show="!isCollapse" class="logo-text">RAG 知识库</span>
+        <span v-show="!isCollapse" class="logo-text">AI小说创作</span>
       </div>
 
       <el-menu
@@ -95,7 +95,7 @@ const activeMenu = computed(() => {
   return path
 })
 
-const currentTitle = computed(() => route.meta.title || 'RAG 知识库问答系统')
+const currentTitle = computed(() => route.meta.title || 'AI小说创作平台')
 
 async function onCommand(cmd) {
   if (cmd === 'logout') {

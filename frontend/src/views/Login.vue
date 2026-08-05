@@ -2,7 +2,7 @@
   <div class="auth-container">
     <div class="auth-card">
       <div class="auth-header">
-        <h1>RAG 知识库问答系统</h1>
+        <h1>AI小说创作平台</h1>
         <p>登录你的账号</p>
       </div>
 

@@ -76,27 +76,51 @@ class RAGEngine:
             "child_chunks": len(child_chunks)
         }
 
-    async def query(self, question: str, top_k: int = TOP_K) -> Dict[str, Any]:
-        """混合检索 + Reranker"""
-        # 1. 向量检索
-        query_embedding = get_embedding(question)
-        vector_results = self.vector_store.search(query_embedding, top_k=top_k * 2)
+    async def query(self, question: str, top_k: int = TOP_K, rewrite: bool = True) -> Dict[str, Any]:
+        """混合检索 + Reranker + 查询改写"""
+        trace_id = self._gen_trace_id()
 
-        # 2. BM25检索
-        bm25_results = self._bm25_search(question, top_k=top_k * 2)
+        # 0. 查询改写/扩展
+        original_query = question
+        expanded_queries = [question]
+        if rewrite:
+            expanded_queries = await self._query_rewrite(question)
+            logger.info(f"[{trace_id}] 查询改写: 原查询='{question[:50]}', 扩展={len(expanded_queries)}条")
+
+        # 1. 多查询向量检索
+        all_vector_results = []
+        for q in expanded_queries:
+            query_embedding = get_embedding(q)
+            results = self.vector_store.search(query_embedding, top_k=top_k * 2)
+            all_vector_results.extend(results)
+
+        # 去重合并
+        seen = set()
+        vector_results = []
+        for r in all_vector_results:
+            key = r["content"][:100]
+            if key not in seen:
+                seen.add(key)
+                vector_results.append(r)
+
+        # 2. BM25检索（用原查询）
+        bm25_results = self._bm25_search(original_query, top_k=top_k * 2)
 
         # 3. RRF融合
         merged_results = self._rrf_fusion(vector_results, bm25_results)
 
         # 4. Reranker重排序
-        reranked_results = self._rerank(question, merged_results, top_k=top_k)
+        reranked_results = self._rerank(original_query, merged_results, top_k=top_k)
 
         # 5. 构建上下文
         context = self._build_context(reranked_results)
 
         # 6. 调用LLM
-        prompt = self._build_prompt(question, context)
+        prompt = self._build_prompt(original_query, context)
         answer = await call_llm(prompt)
+
+        # 7. 记录可观测性
+        self._record_query_metrics(trace_id, original_query, len(reranked_results), len(answer))
 
         return {
             "answer": answer,
@@ -107,34 +131,10 @@ class RAGEngine:
                     "score": round(r.get("score", 0), 3)
                 }
                 for r in reranked_results
-            ]
+            ],
+            "trace_id": trace_id,
+            "expanded_queries": expanded_queries if rewrite else None,
         }
-
-    async def query_stream(self, question: str, top_k: int = TOP_K) -> AsyncGenerator[str, None]:
-        """流式查询"""
-        # 1-4. 检索和重排序
-        query_embedding = get_embedding(question)
-        vector_results = self.vector_store.search(query_embedding, top_k=top_k * 2)
-        bm25_results = self._bm25_search(question, top_k=top_k * 2)
-        merged_results = self._rrf_fusion(vector_results, bm25_results)
-        reranked_results = self._rerank(question, merged_results, top_k=top_k)
-
-        # 5. 发送引用来源
-        sources = [
-            {
-                "content": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"],
-                "filename": r["metadata"].get("filename", "未知"),
-                "score": round(r.get("score", 0), 3)
-            }
-            for r in reranked_results
-        ]
-        yield f"[SOURCES]{json.dumps(sources)}"
-
-        # 6. 流式生成
-        context = self._build_context(reranked_results)
-        prompt = self._build_prompt(question, context)
-        async for chunk in call_llm_stream(prompt):
-            yield chunk
 
     def _bm25_search(self, query: str, top_k: int = 10) -> List[Dict]:
         """BM25关键词检索"""
@@ -240,3 +240,92 @@ class RAGEngine:
             f"{context}\n"
             f"【用户问题】\n{question}"
         )
+
+    # ============ 查询改写/扩展 ============
+
+    async def _query_rewrite(self, question: str) -> List[str]:
+        """查询改写：生成多个不同表述的查询以提升召回率"""
+        try:
+            prompt = (
+                "你是一个查询改写专家。请将用户的问题改写为3种不同的表述方式，"
+                "要求保持原意但使用不同的关键词和句式，以最大化文档检索召回率。\n\n"
+                f"原问题：{question}\n\n"
+                "请直接输出3个改写后的问题，每行一个，不要编号或其他文字："
+            )
+            result = await call_llm(prompt, temperature=0.3, max_tokens=300)
+            queries = [q.strip() for q in result.strip().split("\n") if q.strip()]
+            if len(queries) >= 2:
+                return queries[:3]
+        except Exception as e:
+            logger.warning(f"查询改写失败，使用原查询: {e}")
+        return [question]
+
+    # ============ 可观测性 ============
+
+    _query_metrics = []
+
+    @staticmethod
+    def _gen_trace_id() -> str:
+        import uuid
+        return uuid.uuid4().hex[:12]
+
+    def _record_query_metrics(self, trace_id: str, query: str, source_count: int, answer_len: int):
+        """记录查询指标到内存（生产环境可接入Prometheus/ELK）"""
+        entry = {
+            "trace_id": trace_id,
+            "query": query[:100],
+            "source_count": source_count,
+            "answer_length": answer_len,
+            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        }
+        self._query_metrics.append(entry)
+        if len(self._query_metrics) > 1000:
+            self._query_metrics = self._query_metrics[-500:]
+
+    def get_metrics(self) -> List[Dict]:
+        """获取查询指标历史"""
+        return self._query_metrics.copy()
+
+    async def query_stream(self, question: str, top_k: int = TOP_K, rewrite: bool = True) -> AsyncGenerator[str, None]:
+        """流式查询（支持查询改写）"""
+        trace_id = self._gen_trace_id()
+        original_query = question
+        expanded_queries = [question]
+        if rewrite:
+            expanded_queries = await self._query_rewrite(question)
+
+        # 多查询向量检索
+        all_vector_results = []
+        for q in expanded_queries:
+            query_embedding = get_embedding(q)
+            results = self.vector_store.search(query_embedding, top_k=top_k * 2)
+            all_vector_results.extend(results)
+
+        seen = set()
+        vector_results = []
+        for r in all_vector_results:
+            key = r["content"][:100]
+            if key not in seen:
+                seen.add(key)
+                vector_results.append(r)
+
+        bm25_results = self._bm25_search(original_query, top_k=top_k * 2)
+        merged_results = self._rrf_fusion(vector_results, bm25_results)
+        reranked_results = self._rerank(original_query, merged_results, top_k=top_k)
+
+        sources = [
+            {
+                "content": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"],
+                "filename": r["metadata"].get("filename", "未知"),
+                "score": round(r.get("score", 0), 3)
+            }
+            for r in reranked_results
+        ]
+        yield f"[SOURCES]{json.dumps(sources)}"
+
+        context = self._build_context(reranked_results)
+        prompt = self._build_prompt(original_query, context)
+        async for chunk in call_llm_stream(prompt):
+            yield chunk
+
+        self._record_query_metrics(trace_id, original_query, len(reranked_results), 0)

@@ -19,7 +19,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-app = FastAPI(title="RAG 知识库问答系统", version="2.0.0")
+app = FastAPI(title="AI小说创作平台", version="2.0.0")
 
 # CORS（开发期允许所有来源）
 app.add_middleware(
@@ -49,7 +49,7 @@ async def startup_event():
         logging.error(f"数据库初始化失败：{e}")
         logging.error("请检查 .env 中的 MySQL 连接配置（MYSQL_HOST/PORT/USER/PASSWORD）")
     print("\n" + "=" * 50)
-    print("  RAG 知识库问答系统启动成功！")
+    print("  AI小说创作平台启动成功！")
     print("  API 文档: http://localhost:8000/docs")
     print("  旧版演示: http://localhost:8000/static/demo.html")
     print("=" * 50 + "\n", file=sys.stderr)

@@ -6,6 +6,8 @@ __pycache__/
 .venv/
 node_modules/
 dist/
+# 本地安装的依赖包（体积大，不应上传）
+packages/
 # 大模型权重文件（体积大，应单独下载）
 models/bge-small-zh-v1.5/pytorch_model.bin
 models/bge-small-zh-v1.5/model.safetensors

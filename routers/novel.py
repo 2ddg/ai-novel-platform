@@ -1,6 +1,7 @@
 """小说写作路由：项目管理 / 角色 / 大纲 / 章节 / 记忆 / 导入 / 审阅"""
 import json
 import logging
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Body, UploadFile, File
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from deps import get_current_user
 from models.user import User
-from models.novel import Novel, Character, Chapter, Memory
+from models.novel import Novel, Character, Chapter, Memory, Foreshadowing, Timeline, Version
 from models.schemas import NovelCreateRequest, NovelResponse, CharacterCreateRequest
 from core.novel_engine import NovelEngine
 
@@ -26,6 +27,24 @@ def _get_owned_novel(novel_id: int, user: User, db: Session) -> Novel:
     if novel.user_id != user.id:
         raise HTTPException(status_code=403, detail="无权操作该项目")
     return novel
+
+
+def _orm_to_dict(obj):
+    """安全将 SQLAlchemy ORM 对象转为纯字典（排除 relationship 字段）"""
+    if obj is None:
+        return None
+    result = {}
+    for col in obj.__table__.columns:
+        val = getattr(obj, col.name)
+        if isinstance(val, datetime):
+            val = val.isoformat()
+        result[col.name] = val
+    return result
+
+
+def _orm_list(query):
+    """将查询结果列表转为纯字典列表"""
+    return [_orm_to_dict(item) for item in query]
 
 
 # ============ 小说项目 CRUD ============
@@ -128,7 +147,7 @@ def list_characters(novel_id: int, user: User = Depends(get_current_user),
                     db: Session = Depends(get_db)):
     """获取角色列表"""
     novel = _get_owned_novel(novel_id, user, db)
-    return db.query(Character).filter(Character.novel_id == novel.id).all()
+    return _orm_list(db.query(Character).filter(Character.novel_id == novel.id).all())
 
 
 @router.put("/{novel_id}/characters/{char_id}")
@@ -195,7 +214,7 @@ async def generate_outline(novel_id: int, req: dict = Body(default={}),
 async def generate_chapter(novel_id: int, req: dict,
                            user: User = Depends(get_current_user),
                            db: Session = Depends(get_db)):
-    """生成单个章节（非流式）"""
+    """生成单个章节（非流式）+ 写后审计 + 门禁 + 自动重写"""
     novel = _get_owned_novel(novel_id, user, db)
     chapter_num = req.get("chapter_num", 1)
     chapter_outline = req.get("chapter_outline", "")
@@ -203,6 +222,11 @@ async def generate_chapter(novel_id: int, req: dict,
 
     chars = db.query(Character).filter(Character.novel_id == novel.id).all()
     chars_text = "\n".join([f"- {c.name}：{c.personality or ''}" for c in chars])
+
+    # 注入角色当前状态
+    char_states_text = NovelEngine.format_character_states(chars)
+    if char_states_text:
+        chars_text += f"\n\n【角色当前状态】\n{char_states_text}"
 
     # 获取合并记忆：所有章节记忆 + 全局记忆
     all_memories = db.query(Memory).filter(Memory.novel_id == novel.id).all()
@@ -214,9 +238,24 @@ async def generate_chapter(novel_id: int, req: dict,
             memory_parts.append(f"全局：{m.content}")
     memory_text = "\n".join(memory_parts) if memory_parts else "（初始状态）"
 
+    # 查询未回收伏笔，注入到记忆中
+    pending_foreshadowings = db.query(Foreshadowing).filter(
+        Foreshadowing.novel_id == novel.id, Foreshadowing.status == "pending"
+    ).all()
+    if pending_foreshadowings:
+        foreshadow_text = NovelEngine.format_pending_foreshadowings(pending_foreshadowings)
+        memory_text += f"\n\n【未回收伏笔（请注意适时回收）】\n{foreshadow_text}"
+
+    # 查询最近时间线，注入到记忆中
+    all_timelines = db.query(Timeline).filter(Timeline.novel_id == novel.id).all()
+    timeline_text = NovelEngine.format_recent_timelines(all_timelines, max_chapters=5)
+    if timeline_text:
+        memory_text += f"\n\n【最近重大事件时间线】\n{timeline_text}"
+
     chapters = db.query(Chapter).filter(Chapter.novel_id == novel.id).order_by(Chapter.chapter_num).all()
     prev_summaries = NovelEngine.get_prev_summaries(chapters, chapter_num)
 
+    # 第1次生成
     content = await NovelEngine.write_chapter(
         chapter_num=chapter_num,
         chapter_outline=chapter_outline,
@@ -226,14 +265,54 @@ async def generate_chapter(novel_id: int, req: dict,
         style_guide=novel.style_guide,
     )
 
+    # 写后审计
+    audit_result = await NovelEngine.audit_chapter(
+        chapter_content=content,
+        chapter_num=chapter_num,
+        chapter_outline=chapter_outline,
+        characters=chars_text,
+        memory=memory_text,
+        style_guide=novel.style_guide,
+        prev_summaries=prev_summaries,
+    )
+
+    rewrite_count = 0
+    # 门禁：分数<70 自动重写1次
+    if audit_result["score"] < 70:
+        rewrite_count = 1
+        content = await NovelEngine.rewrite_chapter(
+            chapter_content=content,
+            audit_result=audit_result,
+            chapter_num=chapter_num,
+            chapter_outline=chapter_outline,
+            characters=chars_text,
+            memory=memory_text,
+            prev_summaries=prev_summaries,
+            style_guide=novel.style_guide,
+        )
+        # 重写后重新审计
+        audit_result = await NovelEngine.audit_chapter(
+            chapter_content=content,
+            chapter_num=chapter_num,
+            chapter_outline=chapter_outline,
+            characters=chars_text,
+            memory=memory_text,
+            style_guide=novel.style_guide,
+            prev_summaries=prev_summaries,
+        )
+
     summary = await NovelEngine.summarize_chapter(content, chapter_num)
 
+    import json as _json
     chapter = Chapter(
         novel_id=novel.id,
         chapter_num=chapter_num,
         title=title,
         content=content,
         summary=summary,
+        audit_score=audit_result["score"],
+        audit_result=_json.dumps(audit_result, ensure_ascii=False),
+        rewrite_count=rewrite_count,
     )
     db.add(chapter)
     db.commit()
@@ -245,6 +324,56 @@ async def generate_chapter(novel_id: int, req: dict,
     db.add(memory)
     db.commit()
 
+    # 伏笔追踪：扫描新伏笔 + 检查回收
+    try:
+        new_foreshadowings = await NovelEngine.extract_foreshadowing(content, chapter_num)
+        for fs in new_foreshadowings:
+            db.add(Foreshadowing(
+                novel_id=novel.id,
+                chapter_planted=chapter_num,
+                content=fs.get("content", ""),
+                priority=fs.get("priority", "medium"),
+            ))
+        if pending_foreshadowings:
+            resolved_ids = await NovelEngine.check_foreshadowing_resolved(
+                content, chapter_num,
+                [{"id": f.id, "content": f.content} for f in pending_foreshadowings]
+            )
+            for f in pending_foreshadowings:
+                if f.id in resolved_ids:
+                    f.status = "resolved"
+                    f.chapter_resolved = chapter_num
+        db.commit()
+    except Exception as e:
+        logger.warning(f"伏笔追踪失败: {e}")
+
+    # 角色状态热更新
+    try:
+        char_names = [c.name for c in chars]
+        states = await NovelEngine.extract_character_states(content, chapter_num, char_names)
+        if states:
+            for c in chars:
+                if c.name in states:
+                    import json as _json
+                    c.current_state = _json.dumps(states[c.name], ensure_ascii=False)
+            db.commit()
+    except Exception as e:
+        logger.warning(f"角色状态更新失败: {e}")
+
+    # 时间线事件提取
+    try:
+        events = await NovelEngine.extract_timeline_events(content, chapter_num)
+        for evt in events:
+            db.add(Timeline(
+                novel_id=novel.id,
+                chapter_num=chapter_num,
+                event=evt.get("event", ""),
+                time_label=evt.get("time_label", ""),
+            ))
+        db.commit()
+    except Exception as e:
+        logger.warning(f"时间线事件提取失败: {e}")
+
     return {
         "status": "success",
         "chapter": {
@@ -253,6 +382,9 @@ async def generate_chapter(novel_id: int, req: dict,
             "title": title,
             "content": content,
             "summary": summary,
+            "audit_score": audit_result["score"],
+            "audit_result": audit_result,
+            "rewrite_count": rewrite_count,
         },
         "memory": new_memory,
     }
@@ -271,6 +403,11 @@ async def stream_chapter(novel_id: int, req: dict,
     chars = db.query(Character).filter(Character.novel_id == novel.id).all()
     chars_text = "\n".join([f"- {c.name}：{c.personality or ''}" for c in chars])
 
+    # 注入角色当前状态
+    char_states_text = NovelEngine.format_character_states(chars)
+    if char_states_text:
+        chars_text += f"\n\n【角色当前状态】\n{char_states_text}"
+
     # 获取合并记忆
     all_memories = db.query(Memory).filter(Memory.novel_id == novel.id).all()
     memory_parts = []
@@ -280,6 +417,20 @@ async def stream_chapter(novel_id: int, req: dict,
         else:
             memory_parts.append(f"全局：{m.content}")
     memory_text = "\n".join(memory_parts) if memory_parts else "（初始状态）"
+
+    # 查询未回收伏笔，注入到记忆中
+    pending_foreshadowings = db.query(Foreshadowing).filter(
+        Foreshadowing.novel_id == novel.id, Foreshadowing.status == "pending"
+    ).all()
+    if pending_foreshadowings:
+        foreshadow_text = NovelEngine.format_pending_foreshadowings(pending_foreshadowings)
+        memory_text += f"\n\n【未回收伏笔（请注意适时回收）】\n{foreshadow_text}"
+
+    # 查询最近时间线，注入到记忆中
+    all_timelines = db.query(Timeline).filter(Timeline.novel_id == novel.id).all()
+    timeline_text = NovelEngine.format_recent_timelines(all_timelines, max_chapters=5)
+    if timeline_text:
+        memory_text += f"\n\n【最近重大事件时间线】\n{timeline_text}"
 
     chapters = db.query(Chapter).filter(Chapter.novel_id == novel.id).order_by(Chapter.chapter_num).all()
     prev_summaries = NovelEngine.get_prev_summaries(chapters, chapter_num)
@@ -304,6 +455,47 @@ async def stream_chapter(novel_id: int, req: dict,
             full_content = "".join(content_buf)
             if full_content:
                 try:
+                    # 写后审计
+                    yield f"data: {json.dumps({'type': 'audit_start'}, ensure_ascii=False)}\n\n"
+                    audit_result = await NovelEngine.audit_chapter(
+                        chapter_content=full_content,
+                        chapter_num=chapter_num,
+                        chapter_outline=chapter_outline,
+                        characters=chars_text,
+                        memory=memory_text,
+                        style_guide=novel.style_guide,
+                        prev_summaries=prev_summaries,
+                    )
+                    yield f"data: {json.dumps({'type': 'audit_done', 'data': audit_result}, ensure_ascii=False)}\n\n"
+
+                    rewrite_count = 0
+                    # 门禁：分数<70 自动重写1次
+                    if audit_result["score"] < 70:
+                        rewrite_count = 1
+                        _score = audit_result["score"]
+                        yield f"data: {json.dumps({'type': 'rewrite_start', 'data': f'审计分数{_score}，正在重写...'}, ensure_ascii=False)}\n\n"
+                        full_content = await NovelEngine.rewrite_chapter(
+                            chapter_content=full_content,
+                            audit_result=audit_result,
+                            chapter_num=chapter_num,
+                            chapter_outline=chapter_outline,
+                            characters=chars_text,
+                            memory=memory_text,
+                            prev_summaries=prev_summaries,
+                            style_guide=novel.style_guide,
+                        )
+                        # 重写后重新审计
+                        audit_result = await NovelEngine.audit_chapter(
+                            chapter_content=full_content,
+                            chapter_num=chapter_num,
+                            chapter_outline=chapter_outline,
+                            characters=chars_text,
+                            memory=memory_text,
+                            style_guide=novel.style_guide,
+                            prev_summaries=prev_summaries,
+                        )
+                        yield f"data: {json.dumps({'type': 'rewrite_done', 'data': {'content': full_content, 'audit': audit_result}}, ensure_ascii=False)}\n\n"
+
                     summary = await NovelEngine.summarize_chapter(full_content, chapter_num)
                     chapter = Chapter(
                         novel_id=novel.id,
@@ -311,6 +503,9 @@ async def stream_chapter(novel_id: int, req: dict,
                         title=title,
                         content=full_content,
                         summary=summary,
+                        audit_score=audit_result["score"],
+                        audit_result=json.dumps(audit_result, ensure_ascii=False),
+                        rewrite_count=rewrite_count,
                     )
                     db.add(chapter)
                     db.commit()
@@ -322,7 +517,57 @@ async def stream_chapter(novel_id: int, req: dict,
                     db.add(memory)
                     db.commit()
 
-                    yield f"data: {json.dumps({'type': 'done', 'data': {'chapter_id': chapter.id, 'summary': summary, 'memory': new_memory}}, ensure_ascii=False)}\n\n"
+                    # 伏笔追踪：扫描新伏笔 + 检查回收
+                    try:
+                        new_fs = await NovelEngine.extract_foreshadowing(full_content, chapter_num)
+                        for fs in new_fs:
+                            db.add(Foreshadowing(
+                                novel_id=novel.id,
+                                chapter_planted=chapter_num,
+                                content=fs.get("content", ""),
+                                priority=fs.get("priority", "medium"),
+                            ))
+                        if pending_foreshadowings:
+                            resolved_ids = await NovelEngine.check_foreshadowing_resolved(
+                                full_content, chapter_num,
+                                [{"id": f.id, "content": f.content} for f in pending_foreshadowings]
+                            )
+                            for f in pending_foreshadowings:
+                                if f.id in resolved_ids:
+                                    f.status = "resolved"
+                                    f.chapter_resolved = chapter_num
+                        db.commit()
+                    except Exception as e:
+                        logger.warning(f"伏笔追踪失败: {e}")
+
+                    # 角色状态热更新
+                    try:
+                        char_names = [c.name for c in chars]
+                        states = await NovelEngine.extract_character_states(full_content, chapter_num, char_names)
+                        if states:
+                            for c in chars:
+                                if c.name in states:
+                                    import json as _json
+                                    c.current_state = _json.dumps(states[c.name], ensure_ascii=False)
+                            db.commit()
+                    except Exception as e:
+                        logger.warning(f"角色状态更新失败: {e}")
+
+                    # 时间线事件提取
+                    try:
+                        events = await NovelEngine.extract_timeline_events(full_content, chapter_num)
+                        for evt in events:
+                            db.add(Timeline(
+                                novel_id=novel.id,
+                                chapter_num=chapter_num,
+                                event=evt.get("event", ""),
+                                time_label=evt.get("time_label", ""),
+                            ))
+                        db.commit()
+                    except Exception as e:
+                        logger.warning(f"时间线事件提取失败: {e}")
+
+                    yield f"data: {json.dumps({'type': 'done', 'data': {'chapter_id': chapter.id, 'summary': summary, 'memory': new_memory, 'audit_score': audit_result['score'], 'audit_result': audit_result, 'rewrite_count': rewrite_count}}, ensure_ascii=False)}\n\n"
                 except Exception as e:
                     logger.error(f"保存章节失败: {e}")
                     yield f"data: {json.dumps({'type': 'error', 'data': f'保存失败: {str(e)}'}, ensure_ascii=False)}\n\n"
@@ -336,7 +581,7 @@ def list_chapters(novel_id: int, user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)):
     """获取章节列表"""
     novel = _get_owned_novel(novel_id, user, db)
-    return (
+    return _orm_list(
         db.query(Chapter)
         .filter(Chapter.novel_id == novel.id)
         .order_by(Chapter.chapter_num)
@@ -747,3 +992,475 @@ async def review_chapters(
         return {"status": "success", "suggestions": suggestions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI审阅失败: {str(e)}")
+
+
+# ============ 伏笔管理 ============
+
+@router.get("/{novel_id}/foreshadowings")
+def list_foreshadowings(novel_id: int, user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    """获取伏笔列表（按状态和埋设章节排序）"""
+    novel = _get_owned_novel(novel_id, user, db)
+    return _orm_list(
+        db.query(Foreshadowing)
+        .filter(Foreshadowing.novel_id == novel.id)
+        .order_by(Foreshadowing.status, Foreshadowing.chapter_planted)
+        .all()
+    )
+
+
+@router.post("/{novel_id}/foreshadowings", status_code=status.HTTP_201_CREATED)
+def create_foreshadowing(novel_id: int, req: dict,
+                         user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """手动添加伏笔"""
+    novel = _get_owned_novel(novel_id, user, db)
+    fs = Foreshadowing(
+        novel_id=novel.id,
+        chapter_planted=req.get("chapter_planted", 1),
+        content=req.get("content", ""),
+        priority=req.get("priority", "medium"),
+    )
+    db.add(fs)
+    db.commit()
+    db.refresh(fs)
+    return fs
+
+
+@router.put("/{novel_id}/foreshadowings/{fs_id}")
+def update_foreshadowing(novel_id: int, fs_id: int, req: dict,
+                         user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """更新伏笔（可修改状态、内容、优先级）"""
+    novel = _get_owned_novel(novel_id, user, db)
+    fs = db.query(Foreshadowing).filter(Foreshadowing.id == fs_id, Foreshadowing.novel_id == novel.id).first()
+    if fs is None:
+        raise HTTPException(status_code=404, detail="伏笔不存在")
+    if "content" in req:
+        fs.content = req["content"]
+    if "priority" in req:
+        fs.priority = req["priority"]
+    if "status" in req:
+        fs.status = req["status"]
+    if "chapter_resolved" in req:
+        fs.chapter_resolved = req["chapter_resolved"]
+    db.commit()
+    db.refresh(fs)
+    return fs
+
+
+@router.delete("/{novel_id}/foreshadowings/{fs_id}")
+def delete_foreshadowing(novel_id: int, fs_id: int,
+                         user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """删除伏笔"""
+    novel = _get_owned_novel(novel_id, user, db)
+    fs = db.query(Foreshadowing).filter(Foreshadowing.id == fs_id, Foreshadowing.novel_id == novel.id).first()
+    if fs is None:
+        raise HTTPException(status_code=404, detail="伏笔不存在")
+    db.delete(fs)
+    db.commit()
+    return {"status": "success"}
+
+
+@router.post("/{novel_id}/foreshadowings/batch-delete")
+def batch_delete_foreshadowings(novel_id: int, req: dict,
+                                user: User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    """批量删除伏笔"""
+    novel = _get_owned_novel(novel_id, user, db)
+    ids = req.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要删除的伏笔")
+    count = db.query(Foreshadowing).filter(
+        Foreshadowing.id.in_(ids), Foreshadowing.novel_id == novel.id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"status": "success", "deleted": count}
+
+
+@router.post("/{novel_id}/foreshadowings/batch-update")
+def batch_update_foreshadowings(novel_id: int, req: dict,
+                                user: User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    """批量更新伏笔（如标记回收）"""
+    novel = _get_owned_novel(novel_id, user, db)
+    ids = req.get("ids", [])
+    data = req.get("data", {})
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要更新的伏笔")
+    count = db.query(Foreshadowing).filter(
+        Foreshadowing.id.in_(ids), Foreshadowing.novel_id == novel.id
+    ).update(data, synchronize_session=False)
+    db.commit()
+    return {"status": "success", "updated": count}
+
+
+@router.post("/{novel_id}/foreshadowings/scan")
+async def scan_foreshadowings(novel_id: int, req: dict,
+                              user: User = Depends(get_current_user),
+                              db: Session = Depends(get_db)):
+    """手动扫描指定章节的伏笔（提取新伏笔 + 检查回收）"""
+    novel = _get_owned_novel(novel_id, user, db)
+    chapter_ids = req.get("chapter_ids", [])
+    if not chapter_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个章节")
+
+    chapters = (
+        db.query(Chapter)
+        .filter(Chapter.novel_id == novel.id, Chapter.id.in_(chapter_ids))
+        .order_by(Chapter.chapter_num)
+        .all()
+    )
+
+    pending = db.query(Foreshadowing).filter(
+        Foreshadowing.novel_id == novel.id, Foreshadowing.status == "pending"
+    ).all()
+
+    new_count = 0
+    resolved_count = 0
+    for ch in chapters:
+        try:
+            new_fs = await NovelEngine.extract_foreshadowing(ch.content, ch.chapter_num)
+            for fs in new_fs:
+                db.add(Foreshadowing(
+                    novel_id=novel.id,
+                    chapter_planted=ch.chapter_num,
+                    content=fs.get("content", ""),
+                    priority=fs.get("priority", "medium"),
+                ))
+                new_count += 1
+            if pending:
+                resolved_ids = await NovelEngine.check_foreshadowing_resolved(
+                    ch.content, ch.chapter_num,
+                    [{"id": f.id, "content": f.content} for f in pending]
+                )
+                for f in pending:
+                    if f.id in resolved_ids:
+                        f.status = "resolved"
+                        f.chapter_resolved = ch.chapter_num
+                        resolved_count += 1
+        except Exception as e:
+            logger.warning(f"扫描第{ch.chapter_num}章伏笔失败: {e}")
+
+    db.commit()
+    return {"status": "success", "new_count": new_count, "resolved_count": resolved_count}
+
+
+# ============ 时间线管理 ============
+
+@router.get("/{novel_id}/timelines")
+def list_timelines(novel_id: int, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """获取时间线列表"""
+    novel = _get_owned_novel(novel_id, user, db)
+    return _orm_list(
+        db.query(Timeline)
+        .filter(Timeline.novel_id == novel.id)
+        .order_by(Timeline.chapter_num, Timeline.id)
+        .all()
+    )
+
+
+@router.post("/{novel_id}/timelines", status_code=status.HTTP_201_CREATED)
+def create_timeline(novel_id: int, req: dict,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """手动添加时间线事件"""
+    novel = _get_owned_novel(novel_id, user, db)
+    tl = Timeline(
+        novel_id=novel.id,
+        chapter_num=req.get("chapter_num", 1),
+        event=req.get("event", ""),
+        time_label=req.get("time_label", ""),
+    )
+    db.add(tl)
+    db.commit()
+    db.refresh(tl)
+    return tl
+
+
+@router.put("/{novel_id}/timelines/{tl_id}")
+def update_timeline(novel_id: int, tl_id: int, req: dict,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """更新时间线事件"""
+    novel = _get_owned_novel(novel_id, user, db)
+    tl = db.query(Timeline).filter(Timeline.id == tl_id, Timeline.novel_id == novel.id).first()
+    if tl is None:
+        raise HTTPException(status_code=404, detail="时间线事件不存在")
+    if "event" in req:
+        tl.event = req["event"]
+    if "time_label" in req:
+        tl.time_label = req["time_label"]
+    if "chapter_num" in req:
+        tl.chapter_num = req["chapter_num"]
+    db.commit()
+    db.refresh(tl)
+    return tl
+
+
+@router.delete("/{novel_id}/timelines/{tl_id}")
+def delete_timeline(novel_id: int, tl_id: int,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """删除时间线事件"""
+    novel = _get_owned_novel(novel_id, user, db)
+    tl = db.query(Timeline).filter(Timeline.id == tl_id, Timeline.novel_id == novel.id).first()
+    if tl is None:
+        raise HTTPException(status_code=404, detail="时间线事件不存在")
+    db.delete(tl)
+    db.commit()
+    return {"status": "success"}
+
+
+@router.post("/{novel_id}/timelines/batch-delete")
+def batch_delete_timelines(novel_id: int, req: dict,
+                           user: User = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """批量删除时间线事件"""
+    novel = _get_owned_novel(novel_id, user, db)
+    ids = req.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要删除的事件")
+    count = db.query(Timeline).filter(
+        Timeline.id.in_(ids), Timeline.novel_id == novel.id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"status": "success", "deleted": count}
+
+
+@router.post("/{novel_id}/timelines/scan")
+async def scan_timelines(novel_id: int, req: dict,
+                         user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """手动扫描指定章节的时间线事件"""
+    novel = _get_owned_novel(novel_id, user, db)
+    chapter_ids = req.get("chapter_ids", [])
+    if not chapter_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个章节")
+
+    chapters = (
+        db.query(Chapter)
+        .filter(Chapter.novel_id == novel.id, Chapter.id.in_(chapter_ids))
+        .order_by(Chapter.chapter_num)
+        .all()
+    )
+
+    new_count = 0
+    for ch in chapters:
+        try:
+            events = await NovelEngine.extract_timeline_events(ch.content, ch.chapter_num)
+            for evt in events:
+                db.add(Timeline(
+                    novel_id=novel.id,
+                    chapter_num=ch.chapter_num,
+                    event=evt.get("event", ""),
+                    time_label=evt.get("time_label", ""),
+                ))
+                new_count += 1
+        except Exception as e:
+            logger.warning(f"扫描第{ch.chapter_num}章时间线失败: {e}")
+
+    db.commit()
+    return {"status": "success", "new_count": new_count}
+
+# ============ 文风分析 ============
+
+@router.post("/{novel_id}/style/analyze")
+async def analyze_style(
+    novel_id: int,
+    req: dict,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """分析参考文本的文风，将结果写入小说style_guide"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+
+    reference_text = req.get("reference_text", "")
+    if len(reference_text) < 500:
+        raise HTTPException(status_code=400, detail="参考文本至少500字")
+
+    style_data = await NovelEngine.analyze_style(reference_text)
+    style_guide = NovelEngine.format_style_guide(style_data)
+
+    novel.style_guide = style_guide
+    novel.style_data = json.dumps(style_data, ensure_ascii=False)
+    db.commit()
+
+    return {"status": "success", "style_guide": style_guide, "style_data": style_data}
+
+
+# ============ 版本归档 ============
+
+@router.get("/{novel_id}/versions")
+def list_versions(novel_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取小说版本列表"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+    versions = db.query(Version).filter(Version.novel_id == novel_id).order_by(Version.created_at.desc()).all()
+    return [{"id": v.id, "version_name": v.version_name, "change_summary": v.change_summary,
+             "created_at": v.created_at.isoformat() if v.created_at else None} for v in versions]
+
+
+@router.post("/{novel_id}/versions")
+def create_version(novel_id: int, req: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """创建版本快照"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+
+    # 构建快照
+    chapters = db.query(Chapter).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_num).all()
+    snapshot = {
+        "title": novel.title,
+        "genre": novel.genre,
+        "description": novel.description,
+        "outline": novel.outline,
+        "style_guide": novel.style_guide,
+        "chapters": [{"chapter_num": c.chapter_num, "title": c.title, "content": c.content, "summary": c.summary}
+                      for c in chapters],
+    }
+
+    version = Version(
+        novel_id=novel_id,
+        version_name=req.get("version_name", f"v{datetime.now().strftime('%Y%m%d%H%M%S')}"),
+        snapshot=json.dumps(snapshot, ensure_ascii=False),
+        change_summary=req.get("change_summary", ""),
+    )
+    db.add(version)
+    db.commit()
+    return {"status": "success", "version_id": version.id, "version_name": version.version_name}
+
+
+@router.get("/{novel_id}/versions/{version_id}")
+def get_version(novel_id: int, version_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取版本详情（含快照）"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+    version = db.query(Version).filter(Version.id == version_id, Version.novel_id == novel_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return {"id": version.id, "version_name": version.version_name,
+            "change_summary": version.change_summary,
+            "created_at": version.created_at.isoformat() if version.created_at else None,
+            "snapshot": json.loads(version.snapshot) if version.snapshot else None}
+
+
+@router.post("/{novel_id}/versions/{version_id}/restore")
+def restore_version(novel_id: int, version_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """恢复到指定版本"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+    version = db.query(Version).filter(Version.id == version_id, Version.novel_id == novel_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+
+    # 先创建当前状态的快照
+    current_chapters = db.query(Chapter).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_num).all()
+    current_snapshot = {
+        "title": novel.title, "genre": novel.genre, "description": novel.description,
+        "outline": novel.outline, "style_guide": novel.style_guide,
+        "chapters": [{"chapter_num": c.chapter_num, "title": c.title, "content": c.content, "summary": c.summary}
+                      for c in current_chapters],
+    }
+    backup = Version(
+        novel_id=novel_id,
+        version_name=f"恢复前备份_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        snapshot=json.dumps(current_snapshot, ensure_ascii=False),
+        change_summary=f"恢复到版本{version.version_name}前的自动备份",
+    )
+    db.add(backup)
+
+    # 恢复快照
+    snapshot = json.loads(version.snapshot)
+    novel.title = snapshot.get("title", novel.title)
+    novel.genre = snapshot.get("genre", novel.genre)
+    novel.description = snapshot.get("description", novel.description)
+    novel.outline = snapshot.get("outline", novel.outline)
+    novel.style_guide = snapshot.get("style_guide", novel.style_guide)
+
+    # 恢复章节
+    db.query(Chapter).filter(Chapter.novel_id == novel_id).delete()
+    for ch_data in snapshot.get("chapters", []):
+        db.add(Chapter(
+            novel_id=novel_id,
+            chapter_num=ch_data["chapter_num"],
+            title=ch_data.get("title", ""),
+            content=ch_data.get("content", ""),
+            summary=ch_data.get("summary", ""),
+        ))
+
+    db.commit()
+    return {"status": "success", "message": f"已恢复到版本 {version.version_name}", "backup_version_id": backup.id}
+
+
+@router.delete("/{novel_id}/versions/{version_id}")
+def delete_version(novel_id: int, version_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """删除版本"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+    version = db.query(Version).filter(Version.id == version_id, Version.novel_id == novel_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    db.delete(version)
+    db.commit()
+    return {"status": "success", "message": "版本已删除"}
+
+
+# ============ 分卷规划 + 情绪曲线 ============
+
+@router.post("/{novel_id}/volumes/plan")
+async def plan_volumes(novel_id: int, req: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """AI生成分卷规划"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+
+    total_chapters = req.get("total_chapters", 100)
+    num_volumes = req.get("num_volumes", 3)
+
+    volumes = await NovelEngine.plan_volumes(
+        novel.title, novel.genre or "", novel.description or "", total_chapters, num_volumes
+    )
+    if not volumes:
+        raise HTTPException(status_code=500, detail="分卷规划生成失败")
+
+    # 保存到小说的outline字段末尾
+    volume_text = NovelEngine.format_volume_plan(volumes)
+    novel.volume_plan = json.dumps(volumes, ensure_ascii=False)
+    db.commit()
+
+    return {"volumes": volumes, "volume_text": volume_text}
+
+
+@router.get("/{novel_id}/volumes")
+def get_volume_plan(novel_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """获取分卷规划"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+    if not novel.volume_plan:
+        return {"volumes": []}
+    return {"volumes": json.loads(novel.volume_plan)}
+
+
+@router.post("/{novel_id}/emotion-curve")
+async def analyze_emotion_curve(novel_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """分析章节情绪曲线"""
+    novel = db.query(Novel).filter(Novel.id == novel_id, Novel.user_id == user.id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="小说不存在")
+
+    chapters = db.query(Chapter).filter(Chapter.novel_id == novel_id).order_by(Chapter.chapter_num).all()
+    if not chapters:
+        raise HTTPException(status_code=400, detail="暂无章节数据")
+
+    curve = await NovelEngine.analyze_emotion_curve(chapters)
+    return {"curve": curve}
