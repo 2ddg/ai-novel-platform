@@ -20,3 +20,4 @@ milvus_demo.db
 # 日志
 *.log
 
+.claude/

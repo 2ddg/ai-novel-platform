@@ -1,15 +1,19 @@
 import os
 import sys
 import logging
+from pathlib import Path
 
 # HuggingFace 国内镜像（必须在 sentence_transformers import 前设置）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
 
-from fastapi import FastAPI
+
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
+from config import CORS_ORIGINS
 from routers import auth, chat, knowledge, novel
 from database import init_db
 
@@ -21,10 +25,10 @@ logging.basicConfig(
 
 app = FastAPI(title="AI小说创作平台", version="2.0.0")
 
-# CORS（开发期允许所有来源）
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,8 +40,11 @@ app.include_router(knowledge.router)
 app.include_router(chat.router)
 app.include_router(novel.router)
 
-# 静态文件（保留旧版 demo.html）
-app.mount("/static", StaticFiles(directory="static"), name="static")
+STATIC_DIR = (Path(__file__).resolve().parent / "static").resolve()
+
+# 静态文件（保留旧版 demo.html + 新版前端 build 产物）
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.on_event("startup")
@@ -50,14 +57,40 @@ async def startup_event():
         logging.error("请检查 .env 中的 MySQL 连接配置（MYSQL_HOST/PORT/USER/PASSWORD）")
     print("\n" + "=" * 50)
     print("  AI小说创作平台启动成功！")
-    print("  API 文档: http://localhost:8000/docs")
-    print("  旧版演示: http://localhost:8000/static/demo.html")
+    print()
+    print("  访问地址: http://localhost:8000")
+    print("  API文档: http://localhost:8000/docs")
     print("=" * 50 + "\n", file=sys.stderr)
 
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "message": "服务运行正常"}
+
+
+# 前端页面托管：根路径返回 index.html，非 /api 路径交给 Vue Router
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    if full_path.startswith("api"):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    if full_path:
+        parts = Path(full_path).parts
+        if any(part.startswith(".") for part in parts):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        candidate = (STATIC_DIR / full_path).resolve()
+        try:
+            candidate.relative_to(STATIC_DIR)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not Found")
+        if candidate.is_file():
+            return FileResponse(candidate)
+
+    index_file = STATIC_DIR / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="前端尚未构建")
 
 
 if __name__ == "__main__":

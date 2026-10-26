@@ -1,6 +1,6 @@
 """小说写作相关表 ORM 模型"""
 from datetime import datetime
-from sqlalchemy import Integer, String, Text, DateTime, ForeignKey, Column
+from sqlalchemy import Integer, String, Text, DateTime, ForeignKey, Column, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -46,6 +46,9 @@ class Character(Base):
 
 class Chapter(Base):
     __tablename__ = "chapters"
+    __table_args__ = (
+        UniqueConstraint("novel_id", "chapter_num", name="uq_chapter_novel_num"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     novel_id = Column(Integer, ForeignKey("novels.id", ondelete="CASCADE"), nullable=False)
@@ -65,6 +68,9 @@ class Chapter(Base):
 
 class Memory(Base):
     __tablename__ = "memories"
+    __table_args__ = (
+        UniqueConstraint("novel_id", "chapter_num", name="uq_memory_novel_num"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     novel_id = Column(Integer, ForeignKey("novels.id", ondelete="CASCADE"), nullable=False)

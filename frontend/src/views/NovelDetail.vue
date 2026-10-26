@@ -1,78 +1,114 @@
 <template>
-  <div class="novel-detail" v-loading="loading">
-    <div class="page-header">
-      <div class="header-left">
-        <el-button :icon="ArrowLeft" @click="$router.push('/novel')">返回</el-button>
-        <h2 style="margin-left: 12px">{{ novel?.title }}</h2>
-        <el-tag v-if="novel?.genre" style="margin-left: 8px">{{ novel.genre }}</el-tag>
+  <div class="novel-detail fade-rise" v-loading="loading">
+    <button type="button" class="back-link" @click="$router.push('/novel')">
+      <el-icon><ArrowLeft /></el-icon>
+      返回书架
+    </button>
+
+    <header class="novel-hero">
+      <div class="hero-cover" :style="bookCoverStyle(novel?.genre)">
+        <span class="hero-cover-spine" />
+        <span class="hero-cover-mark">✳</span>
+        <span class="hero-cover-initial">{{ bookInitial(novel?.title) }}</span>
+        <div class="hero-cover-foot">
+          <span>{{ novel?.genre || '未分类' }}</span>
+          <span>AI NOVEL</span>
+        </div>
       </div>
-    </div>
 
-    <el-tabs v-model="activeTab" type="border-card">
-      <!-- 基本信息 + 风格 -->
-      <el-tab-pane label="基本信息" name="info">
-        <el-form :model="editForm" label-width="100px" style="max-width: 700px">
-          <el-form-item label="小说名">
-            <el-input v-model="editForm.title" />
-          </el-form-item>
-          <el-form-item label="类型">
-            <el-select v-model="editForm.genre" placeholder="选择类型" allow-create filterable style="width: 100%">
-              <el-option label="玄幻" value="玄幻" />
-              <el-option label="都市" value="都市" />
-              <el-option label="言情" value="言情" />
-              <el-option label="科幻" value="科幻" />
-              <el-option label="悬疑" value="悬疑" />
-              <el-option label="历史" value="历史" />
-              <el-option label="武侠" value="武侠" />
-              <el-option label="其他" value="其他" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="简介">
-            <el-input v-model="editForm.description" type="textarea" :rows="3" />
-          </el-form-item>
-          <el-form-item label="写作风格">
-            <el-input v-model="editForm.style_guide" type="textarea" :rows="12" placeholder="写作风格指南（可使用默认）" />
-            <el-button link type="primary" @click="useDefaultStyle">使用默认风格模板</el-button>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="saving" @click="onSaveInfo">保存</el-button>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
+      <div class="hero-copy">
+        <p class="page-kicker">MANUSCRIPT · {{ String(novel?.id || '').padStart(3, '0') }}</p>
+        <h1 class="hero-title">{{ novel?.title || '未命名作品' }}</h1>
+        <p class="hero-desc">
+          {{ novel?.description || '还没有写简介。打开「设定」，把这本书的第一句话补上。' }}
+        </p>
 
+        <div class="hero-stats">
+          <div class="hero-stat">
+            <strong>{{ chapters.length }}</strong>
+            <span>章节</span>
+          </div>
+          <span class="hero-stat-rule" />
+          <div class="hero-stat">
+            <strong>{{ characters.length }}</strong>
+            <span>角色</span>
+          </div>
+          <span class="hero-stat-rule" />
+          <div class="hero-stat">
+            <strong>{{ totalWordsLabel }}</strong>
+            <span>字</span>
+          </div>
+          <span class="hero-stat-rule" />
+          <div class="hero-stat">
+            <strong>{{ averageAuditScore ?? '—' }}</strong>
+            <span>平均审计</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-actions">
+        <el-button type="primary" class="hero-primary" @click="focusWriting">
+          继续写作
+          <el-icon class="el-icon--right"><Right /></el-icon>
+        </el-button>
+        <el-button :disabled="!chapters.length" @click="showExportDialog = true">
+          导出作品
+        </el-button>
+      </div>
+    </header>
+
+    <el-tabs v-model="activeTab" tab-position="left" class="studio-tabs">
       <!-- 角色设定 -->
-      <el-tab-pane label="角色设定" name="characters">
-        <div class="tab-header">
+      <el-tab-pane name="characters">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><User /></el-icon>
+            <span>角色</span>
+            <span class="studio-tab-count">{{ characters.length }}</span>
+          </span>
+        </template>
+        <div class="panel-heading">
           <div>
+            <p class="panel-kicker">CAST</p>
+            <h2>角色</h2>
+            <p class="panel-sub">让每个人都带着自己的欲望进场。</p>
+          </div>
+          <div class="panel-actions">
             <el-button type="primary" :icon="Plus" @click="showCharDialog = true">添加角色</el-button>
             <el-button
-              type="success"
               :icon="MagicStick"
               :loading="extractingChars"
               :disabled="!chapters.length"
               @click="onExtractCharacters"
             >
-              AI扫描全文补充角色
+              从全文提取
             </el-button>
           </div>
         </div>
-        <el-table :data="characters" style="width: 100%">
-          <el-table-column prop="name" label="角色名" width="120" />
-          <el-table-column prop="personality" label="性格" show-overflow-tooltip />
-          <el-table-column prop="background" label="背景" show-overflow-tooltip />
-          <el-table-column label="当前状态" width="200" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span v-if="row.current_state">{{ formatCharState(row.current_state) }}</span>
-              <span v-else style="color:#909399">暂无</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="150">
-            <template #default="{ row }">
-              <el-button size="small" @click="onEditChar(row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="onDeleteChar(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+
+        <div v-if="!characters.length" class="empty-note">
+          还没有角色。先写下主角的名字与欲望，故事会自己找上门。
+        </div>
+        <div v-else class="character-grid">
+          <article v-for="char in characters" :key="char.id" class="character-card">
+            <div class="character-top">
+              <span class="character-avatar">{{ bookInitial(char.name) }}</span>
+              <div>
+                <h3>{{ char.name }}</h3>
+                <p>{{ char.personality || '性格待补充' }}</p>
+              </div>
+            </div>
+            <p class="character-bg">{{ char.background || '还没有写下背景。' }}</p>
+            <div v-if="char.current_state" class="character-state">
+              <span>当前状态</span>
+              <strong>{{ formatCharState(char.current_state) }}</strong>
+            </div>
+            <div class="character-actions">
+              <button type="button" @click="onEditChar(char)">编辑</button>
+              <button type="button" class="danger" @click="onDeleteChar(char)">删除</button>
+            </div>
+          </article>
+        </div>
 
         <el-dialog v-model="showCharDialog" :title="editingChar ? '编辑角色' : '添加角色'" width="450px">
           <el-form :model="charForm" label-width="80px">
@@ -94,102 +130,194 @@
       </el-tab-pane>
 
       <!-- 大纲 -->
-      <el-tab-pane label="大纲" name="outline">
-        <div class="tab-header">
+      <el-tab-pane name="outline">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Notebook /></el-icon>
+            <span>大纲</span>
+          </span>
+        </template>
+        <div class="panel-heading">
           <div>
-            <el-button type="primary" :icon="MagicStick" :loading="generating" @click="onGenerateOutline">
-              {{ novel?.outline ? '重新生成大纲' : 'AI生成大纲' }}
+            <p class="panel-kicker">STRUCTURE</p>
+            <h2>大纲</h2>
+            <p class="panel-sub">骨架可以改，但不能没有。</p>
+          </div>
+          <span class="panel-count">{{ outlineText.length }} 字</span>
+        </div>
+
+        <div class="outline-layout">
+          <aside class="outline-side">
+            <div class="dark-note">
+              <span class="dark-note-mark">✳</span>
+              <p>先写下你非写不可的那一幕，剩下的交给结构。</p>
+              <span>WRITING NOTE · 01</span>
+            </div>
+            <label class="field-label">灵感与要求</label>
+            <el-input
+              v-model="outlineIdeas"
+              type="textarea"
+              :rows="7"
+              placeholder="可选。写下想法、人物关系、想写的场面；留空则由 AI 自动补全。"
+            />
+            <el-button
+              type="primary"
+              class="outline-generate"
+              :icon="MagicStick"
+              :loading="generating"
+              @click="onGenerateOutline"
+            >
+              {{ novel?.outline ? '重新生成大纲' : 'AI 生成大纲' }}
             </el-button>
             <el-button
-              type="success"
-              :icon="MagicStick"
               :loading="regeneratingOutline"
               :disabled="!chapters.length"
+              class="outline-regenerate"
               @click="onRegenerateOutline"
             >
               根据已有章节生成
             </el-button>
+          </aside>
+
+          <div class="outline-main">
+            <div class="outline-main-head">
+              <span>故事大纲</span>
+              <span>{{ outlineText.length }} 字</span>
+            </div>
+            <el-input
+              v-model="outlineText"
+              type="textarea"
+              :rows="24"
+              class="prose-input"
+              placeholder="故事从这里开始生长。AI 生成的结果会出现在这里，也可以直接手动写。"
+            />
+            <div class="outline-save">
+              <el-button type="primary" :loading="saving" @click="onSaveOutline">保存大纲</el-button>
+            </div>
           </div>
-        </div>
-        <el-input
-          v-model="outlineIdeas"
-          type="textarea"
-          :rows="4"
-          placeholder="（可选）填写你的想法、思路或灵感片段，AI会围绕你的想法补足完整大纲。留空则由AI全自动生成。"
-          style="margin-bottom: 12px"
-        />
-        <el-input
-          v-model="outlineText"
-          type="textarea"
-          :rows="20"
-          placeholder="AI生成的大纲将显示在这里，也可以手动编辑"
-        />
-        <div style="margin-top: 12px; text-align: right">
-          <el-button type="primary" :loading="saving" @click="onSaveOutline">保存大纲</el-button>
         </div>
       </el-tab-pane>
 
       <!-- 章节 -->
-      <el-tab-pane label="章节" name="chapters">
-        <div class="tab-header">
-          <span style="color: #909399">共 {{ chapters.length }} 章</span>
+      <el-tab-pane name="chapters">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Reading /></el-icon>
+            <span>章节</span>
+            <span class="studio-tab-count">{{ chapters.length }}</span>
+          </span>
+        </template>
+
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">MANUSCRIPT</p>
+            <h2>章节</h2>
+            <p class="panel-sub">一本小说，是许多个「下一章」堆起来的。</p>
+          </div>
+          <div class="panel-actions">
+            <span class="panel-count">共 {{ chapters.length }} 章 · {{ totalWordsLabel }} 字</span>
+            <el-button :disabled="!chapters.length" @click="activeTab = 'fulltext'">审阅全文</el-button>
+          </div>
         </div>
-        <el-table :data="chapters" style="width: 100%" @row-click="onOpenChapter">
-          <el-table-column prop="chapter_num" label="第X章" width="80" />
-          <el-table-column prop="title" label="标题" width="150" />
-          <el-table-column prop="summary" label="摘要" show-overflow-tooltip />
-          <el-table-column label="审计" width="120" @click.stop>
-            <template #default="{ row }">
-              <el-tag v-if="row.audit_score !== null && row.audit_score !== undefined" :type="row.audit_score >= 70 ? 'success' : 'warning'" size="small">
-                {{ row.audit_score }}/100
+
+        <div v-if="!chapters.length" class="empty-note">
+          还没有章节。在下方写下第一章的第一句话，AI 会接着往下写。
+        </div>
+        <div v-else class="chapter-grid">
+          <article
+            v-for="ch in chapters"
+            :key="ch.id"
+            class="chapter-card"
+            @click="onOpenChapter(ch)"
+          >
+            <div class="chapter-card-top">
+              <span class="chapter-no">CH. {{ String(ch.chapter_num).padStart(2, '0') }}</span>
+              <el-tag
+                v-if="ch.audit_score !== null && ch.audit_score !== undefined"
+                :type="ch.audit_score >= 70 ? 'success' : 'warning'"
+                size="small"
+                effect="plain"
+              >
+                {{ ch.audit_score }}
               </el-tag>
-              <span v-else style="color: #999; font-size: 12px">未审计</span>
-              <el-tag v-if="row.rewrite_count > 0" size="small" type="danger" style="margin-left: 4px">重写{{ row.rewrite_count }}次</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="200" @click.stop>
-            <template #default="{ row }">
-              <el-button size="small" type="primary" @click="onOpenChapter(row)">继续写作</el-button>
-              <el-button size="small" @click="onEditChapter(row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="onDeleteChapter(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+              <span v-else class="chapter-unaudited">未审计</span>
+            </div>
+            <h3>{{ ch.title || '未命名章节' }}</h3>
+            <p class="chapter-excerpt">
+              {{ ch.summary || (ch.content || '').slice(0, 72) || '还没有正文。' }}
+            </p>
+            <div class="chapter-card-foot">
+              <span>{{ (ch.content || '').length }} 字</span>
+              <span v-if="ch.rewrite_count > 0">重写 {{ ch.rewrite_count }} 次</span>
+              <div class="chapter-card-actions" @click.stop>
+                <button type="button" @click="onOpenChapter(ch)">续写</button>
+                <button type="button" @click="onEditChapter(ch)">编辑</button>
+                <button type="button" class="danger" @click="onDeleteChapter(ch)">删除</button>
+              </div>
+            </div>
+          </article>
+        </div>
 
-        <el-divider />
-
-        <div class="write-section">
-          <h3>写新章节</h3>
-          <el-form :model="writeForm" label-width="100px" inline>
-            <el-form-item label="章节号">
-              <el-input-number v-model="writeForm.chapter_num" :min="1" :max="999" />
-            </el-form-item>
-            <el-form-item label="标题">
-              <el-input v-model="writeForm.title" placeholder="章节标题" style="width: 200px" />
-            </el-form-item>
-            <el-form-item label="章节要求">
-              <el-input v-model="writeForm.chapter_outline" placeholder="本章主要事件/冲突" style="width: 300px" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="writing" @click="onGenerateChapter">AI写作</el-button>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="success" :loading="streaming" @click="onStreamChapter">流式写作</el-button>
-            </el-form-item>
+        <div id="write-studio" class="write-studio">
+          <div class="write-head">
+            <div>
+              <p class="panel-kicker">WRITE NEXT</p>
+              <h3>写第 {{ writeForm.chapter_num }} 章</h3>
+            </div>
+            <span class="write-hint">AI 会带上角色、记忆与未回收伏笔</span>
+          </div>
+          <el-form :model="writeForm" label-position="top" class="write-form">
+            <div class="write-grid">
+              <el-form-item label="章节号">
+                <el-input-number v-model="writeForm.chapter_num" :min="1" :max="999" />
+              </el-form-item>
+              <el-form-item label="标题">
+                <el-input v-model="writeForm.title" placeholder="章节标题" />
+              </el-form-item>
+              <el-form-item label="章节要求" class="span-2">
+                <el-input
+                  v-model="writeForm.chapter_outline"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="本章主要事件、冲突或想写的画面"
+                />
+              </el-form-item>
+            </div>
+            <div class="write-actions">
+              <el-button type="primary" :loading="writing" @click="onGenerateChapter">AI 写作</el-button>
+              <el-button class="stream-btn" :loading="streaming" @click="onStreamChapter">
+                流式写作
+              </el-button>
+              <span class="write-footnote">初稿不需要完美，它只需要存在。</span>
+            </div>
           </el-form>
         </div>
 
         <div v-if="writingContent" class="chapter-preview">
           <div class="preview-header">
-            <span>生成中...</span>
-            <el-button size="small" @click="writingContent = ''">关闭</el-button>
+            <span>{{ streaming ? '正在生成…' : '生成结果' }}</span>
+            <el-button size="small" text @click="writingContent = ''">关闭</el-button>
           </div>
           <div class="preview-content">{{ writingContent }}</div>
         </div>
       </el-tab-pane>
 
       <!-- 记忆（分章节） -->
-      <el-tab-pane label="记忆" name="memory">
+      <el-tab-pane name="memory">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Collection /></el-icon>
+            <span>记忆</span>
+            <span class="studio-tab-count">{{ memoryChapters.length }}</span>
+          </span>
+        </template>
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">CONTINUITY</p>
+            <h2>记忆</h2>
+            <p class="panel-sub">AI 的连续性靠它，而不是靠运气。</p>
+          </div>
+        </div>
         <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
           AI自动维护关键状态记忆：每章写完后自动生成对应记忆条目。记忆是给AI用的，确保续写时角色状态、伏笔、剧情不丢。
         </el-alert>
@@ -273,18 +401,48 @@
       </el-tab-pane>
 
       <!-- 伏笔追踪 -->
-      <el-tab-pane label="伏笔" name="foreshadowing">
-        <div class="tab-header">
-          <span style="color: #909399">共 {{ foreshadowings.length }} 条伏笔（{{ pendingForeshadowings }} 待回收 / {{ resolvedForeshadowings }} 已回收）</span>
+      <el-tab-pane name="foreshadowing">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Flag /></el-icon>
+            <span>伏笔</span>
+            <span v-if="pendingForeshadowings" class="studio-tab-count accent">{{ pendingForeshadowings }}</span>
+          </span>
+        </template>
+        <div class="panel-heading">
           <div>
-            <el-button size="small" type="warning" :loading="scanningFs" @click="showFsScanDialog = true">AI扫描章节伏笔</el-button>
-            <el-button size="small" type="primary" @click="onAddForeshadowing">添加伏笔</el-button>
-            <el-button v-if="fsBatchSelected.length" size="small" type="success" @click="onBatchResolveFs">批量标记回收 ({{ fsBatchSelected.length }})</el-button>
-            <el-button v-if="fsBatchSelected.length" size="small" type="danger" @click="onBatchDeleteFs">批量删除 ({{ fsBatchSelected.length }})</el-button>
-            <el-button v-if="fsBatchSelected.length" size="small" @click="fsBatchSelected = []">取消选择</el-button>
+            <p class="panel-kicker">PAYOFF</p>
+            <h2>伏笔</h2>
+            <p class="panel-sub">埋下的每一颗种子，都要记得浇水。</p>
+          </div>
+          <div class="panel-actions">
+            <el-button :loading="scanningFs" @click="showFsScanDialog = true">AI 扫描伏笔</el-button>
+            <el-button type="primary" @click="onAddForeshadowing">添加伏笔</el-button>
           </div>
         </div>
-        <el-table :data="foreshadowings" style="width: 100%" @selection-change="fsBatchSelected = $event">
+
+        <div class="metric-row">
+          <div class="metric">
+            <span>全部</span>
+            <strong>{{ foreshadowings.length }}</strong>
+          </div>
+          <div class="metric accent">
+            <span>待回收</span>
+            <strong>{{ pendingForeshadowings }}</strong>
+          </div>
+          <div class="metric">
+            <span>已回收</span>
+            <strong>{{ resolvedForeshadowings }}</strong>
+          </div>
+          <div v-if="fsBatchSelected.length" class="metric-batch">
+            <el-button size="small" type="success" @click="onBatchResolveFs">标记回收 ({{ fsBatchSelected.length }})</el-button>
+            <el-button size="small" type="danger" @click="onBatchDeleteFs">删除 ({{ fsBatchSelected.length }})</el-button>
+            <el-button size="small" @click="fsBatchSelected = []">取消选择</el-button>
+          </div>
+        </div>
+
+        <div class="data-card">
+        <el-table :data="foreshadowings" style="width: 100%" @selection-change="fsBatchSelected = $event" empty-text="还没有伏笔。AI 会在写作后自动记录，也可以手动添加。">
           <el-table-column type="selection" width="40" />
           <el-table-column prop="chapter_planted" label="埋设章" width="80" />
           <el-table-column prop="content" label="伏笔内容" show-overflow-tooltip />
@@ -311,20 +469,43 @@
             </template>
           </el-table-column>
         </el-table>
+        </div>
       </el-tab-pane>
 
       <!-- 时间线 -->
-      <el-tab-pane label="时间线" name="timeline">
-        <div class="tab-header">
-          <span style="color: #909399">共 {{ timelines.length }} 条事件</span>
+      <el-tab-pane name="timeline">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Clock /></el-icon>
+            <span>时间线</span>
+            <span class="studio-tab-count">{{ timelines.length }}</span>
+          </span>
+        </template>
+        <div class="panel-heading">
           <div>
-            <el-button size="small" type="warning" :loading="scanningTl" @click="showTlScanDialog = true">AI扫描章节事件</el-button>
-            <el-button size="small" type="primary" @click="onAddTimeline">添加事件</el-button>
-            <el-button v-if="tlBatchSelected.length" size="small" type="danger" @click="onBatchDeleteTl">批量删除 ({{ tlBatchSelected.length }})</el-button>
-            <el-button v-if="tlBatchSelected.length" size="small" @click="tlBatchSelected = []">取消选择</el-button>
+            <p class="panel-kicker">CHRONOLOGY</p>
+            <h2>时间线</h2>
+            <p class="panel-sub">谁在什么时候做了什么，别让读者替你记。</p>
+          </div>
+          <div class="panel-actions">
+            <el-button :loading="scanningTl" @click="showTlScanDialog = true">AI 扫描事件</el-button>
+            <el-button type="primary" @click="onAddTimeline">添加事件</el-button>
           </div>
         </div>
-        <el-table :data="timelines" style="width: 100%" @selection-change="tlBatchSelected = $event">
+
+        <div class="metric-row">
+          <div class="metric">
+            <span>事件</span>
+            <strong>{{ timelines.length }}</strong>
+          </div>
+          <div v-if="tlBatchSelected.length" class="metric-batch">
+            <el-button size="small" type="danger" @click="onBatchDeleteTl">删除 ({{ tlBatchSelected.length }})</el-button>
+            <el-button size="small" @click="tlBatchSelected = []">取消选择</el-button>
+          </div>
+        </div>
+
+        <div class="data-card">
+        <el-table :data="timelines" style="width: 100%" @selection-change="tlBatchSelected = $event" empty-text="还没有时间线事件。AI 会在生成章节后自动提取。">
           <el-table-column type="selection" width="40" />
           <el-table-column prop="chapter_num" label="章节" width="80" />
           <el-table-column prop="time_label" label="时间标记" width="120" />
@@ -336,25 +517,34 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!timelines.length" description="暂无时间线事件，AI会在生成章节后自动提取" />
+        </div>
       </el-tab-pane>
 
       <!-- 全文 + AI修改意见 -->
-      <el-tab-pane label="全文" name="fulltext">
-        <div class="tab-header">
-          <span style="color: #909399">共 {{ chapters.length }} 章</span>
+      <el-tab-pane name="fulltext">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Document /></el-icon>
+            <span>全文</span>
+          </span>
+        </template>
+        <div class="panel-heading">
           <div>
+            <p class="panel-kicker">THE WHOLE</p>
+            <h2>全文</h2>
+            <p class="panel-sub">退后一步，看看这本书现在的样子。</p>
+          </div>
+          <div class="panel-actions">
             <el-button
-              type="warning"
               :icon="MagicStick"
               :loading="reviewing"
               :disabled="!chapters.length"
               @click="showReviewDialog = true"
             >
-              AI修改意见
+              获取修改意见
             </el-button>
             <el-button
-              type="success"
+              type="primary"
               :icon="Download"
               :disabled="!chapters.length"
               @click="showExportDialog = true"
@@ -364,21 +554,39 @@
           </div>
         </div>
 
+        <div class="metric-row">
+          <div class="metric">
+            <span>章节</span>
+            <strong>{{ chapters.length }}</strong>
+          </div>
+          <div class="metric">
+            <span>总字数</span>
+            <strong>{{ totalWordsLabel }}</strong>
+          </div>
+          <div class="metric">
+            <span>平均审计</span>
+            <strong>{{ averageAuditScore ?? '—' }}</strong>
+          </div>
+        </div>
+
         <!-- AI审阅结果 -->
-        <el-card v-if="reviewResult" style="margin-bottom: 16px">
-          <template #header>
-            <div style="display: flex; justify-content: space-between; align-items: center">
-              <span style="font-weight: 600">AI修改建议</span>
-              <el-button size="small" text @click="reviewResult = ''">关闭</el-button>
+        <section v-if="reviewResult" class="review-card">
+          <div class="review-card-head">
+            <div>
+              <p class="panel-kicker">EDITOR'S NOTE</p>
+              <h3>AI 修改建议</h3>
             </div>
-          </template>
+            <el-button size="small" text @click="reviewResult = ''">关闭</el-button>
+          </div>
           <div class="review-content">{{ reviewResult }}</div>
-        </el-card>
+        </section>
 
         <!-- 分章节表格 -->
+        <div class="data-card">
         <el-table
           :data="chapters"
           style="width: 100%"
+          empty-text="还没有正文。先去「章节」写下第一章。"
           @row-click="onEditChapter"
         >
           <el-table-column prop="chapter_num" label="第X章" width="80" />
@@ -402,6 +610,71 @@
             </template>
           </el-table-column>
         </el-table>
+        </div>
+      </el-tab-pane>
+
+      <!-- 作品设定 -->
+      <el-tab-pane name="info">
+        <template #label>
+          <span class="studio-tab">
+            <el-icon><Setting /></el-icon>
+            <span>设定</span>
+          </span>
+        </template>
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">THE BRIEF</p>
+            <h2>设定</h2>
+            <p class="panel-sub">书名、类型与写作风格，AI 续写时会参考这里。</p>
+          </div>
+        </div>
+
+        <div class="settings-layout">
+          <el-form :model="editForm" label-position="top" class="settings-form">
+            <div class="form-grid">
+              <el-form-item label="小说名">
+                <el-input v-model="editForm.title" />
+              </el-form-item>
+              <el-form-item label="类型">
+                <el-select v-model="editForm.genre" placeholder="选择类型" allow-create filterable style="width: 100%">
+                  <el-option label="玄幻" value="玄幻" />
+                  <el-option label="都市" value="都市" />
+                  <el-option label="言情" value="言情" />
+                  <el-option label="科幻" value="科幻" />
+                  <el-option label="悬疑" value="悬疑" />
+                  <el-option label="历史" value="历史" />
+                  <el-option label="武侠" value="武侠" />
+                  <el-option label="其他" value="其他" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <el-form-item label="简介">
+              <el-input v-model="editForm.description" type="textarea" :rows="3" placeholder="用两三句话告诉读者，这本书讲什么。" />
+            </el-form-item>
+            <div class="style-head">
+              <span class="field-label">写作风格指南</span>
+              <el-button link type="primary" @click="useDefaultStyle">使用默认风格模板</el-button>
+            </div>
+            <el-input v-model="editForm.style_guide" type="textarea" :rows="12" placeholder="写作风格指南（可使用默认）" />
+            <div class="settings-save">
+              <el-button type="primary" :loading="saving" @click="onSaveInfo">保存设定</el-button>
+            </div>
+          </el-form>
+
+          <aside class="settings-aside">
+            <div class="dark-note">
+              <span class="dark-note-mark">✳</span>
+              <p>设定是为了让故事稳定，不是为了把它关起来。</p>
+              <span>THE BRIEF · 06</span>
+            </div>
+            <dl class="meta-list">
+              <div><dt>作品编号</dt><dd>#{{ String(novel?.id || '').padStart(3, '0') }}</dd></div>
+              <div><dt>当前章节</dt><dd>{{ chapters.length }}</dd></div>
+              <div><dt>已写字数</dt><dd>{{ totalWordsLabel }}</dd></div>
+              <div><dt>最近审计</dt><dd>{{ averageAuditScore ?? '—' }}</dd></div>
+            </dl>
+          </aside>
+        </div>
       </el-tab-pane>
     </el-tabs>
 
@@ -592,10 +865,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Plus, MagicStick, Download } from '@element-plus/icons-vue'
+import {
+  ArrowLeft, Right, Plus, MagicStick, Download,
+  Reading, User, Notebook, Collection, Flag, Clock, Document, Setting,
+} from '@element-plus/icons-vue'
 import {
   getNovel, updateNovel, listCharacters, createCharacter, updateCharacter, deleteCharacter,
   generateOutline, listChapters, getChapter, updateChapter, deleteChapter,
@@ -607,6 +883,7 @@ import {
   batchDeleteTimelines,
 } from '../api/novel'
 import { DEFAULT_STYLE_GUIDE } from '../config'
+import { bookCoverStyle, bookInitial } from '../utils/bookCover'
 
 const route = useRoute()
 const novelId = computed(() => route.params.id)
@@ -623,7 +900,7 @@ const scanningFs = ref(false)
 const scanningTl = ref(false)
 
 const novel = ref(null)
-const activeTab = ref('info')
+const activeTab = ref('chapters')
 const outlineText = ref('')
 const outlineIdeas = ref('')
 const memoryGlobal = ref('')
@@ -637,6 +914,21 @@ const timelines = ref([])
 
 const pendingForeshadowings = computed(() => foreshadowings.value.filter(f => f.status === 'pending').length)
 const resolvedForeshadowings = computed(() => foreshadowings.value.filter(f => f.status === 'resolved').length)
+const maxChapterNum = computed(() => chapters.value.reduce((max, ch) => Math.max(max, ch.chapter_num || 0), 0))
+const averageAuditScore = computed(() => {
+  const scored = chapters.value.filter(ch => ch.audit_score !== null && ch.audit_score !== undefined)
+  if (!scored.length) return null
+  return Math.round(scored.reduce((sum, ch) => sum + ch.audit_score, 0) / scored.length)
+})
+const totalWords = computed(() => chapters.value.reduce((sum, ch) => sum + (ch.content || '').replace(/\s/g, '').length, 0))
+const totalWordsLabel = computed(() => totalWords.value.toLocaleString('zh-CN'))
+
+function focusWriting() {
+  activeTab.value = 'chapters'
+  nextTick(() => {
+    document.getElementById('write-studio')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
+}
 
 // 伏笔编辑
 const showFsEditDialog = ref(false)
@@ -705,7 +997,8 @@ async function fetchData() {
     memoryGlobal.value = mem.global || ''
     memoryChapters.value = mem.chapters || []
     if (chs.length > 0) {
-      writeForm.value.chapter_num = chs[chs.length - 1].chapter_num + 1
+      const maxNum = chs.reduce((max, ch) => Math.max(max, ch.chapter_num || 0), 0)
+      writeForm.value.chapter_num = maxNum + 1
     }
   } finally {
     loading.value = false
@@ -917,7 +1210,9 @@ async function onGenerateChapter() {
     })
     writingContent.value = result.chapter.content
     ElMessage.success('章节生成成功')
-    fetchData()
+    await fetchData()
+    writeForm.value.title = ''
+    writeForm.value.chapter_outline = ''
   } finally {
     writing.value = false
   }
@@ -1018,6 +1313,9 @@ async function onStreamChapter() {
                 }
                 writingContent.value += '\n'
               }
+              await fetchData()
+              writeForm.value.title = ''
+              writeForm.value.chapter_outline = ''
             }
           } catch {
             writingContent.value += dataStr
@@ -1144,7 +1442,7 @@ async function onDeleteForeshadowing(row) {
 
 async function onResolveForeshadowing(row) {
   try {
-    await updateForeshadowing(novelId.value, row.id, { status: 'resolved', chapter_resolved: chapters.value.length })
+    await updateForeshadowing(novelId.value, row.id, { status: 'resolved', chapter_resolved: maxChapterNum.value })
     ElMessage.success('已标记为回收')
     loadForeshadowings()
   } catch { /* handled */ }
@@ -1167,7 +1465,7 @@ async function onBatchResolveFs() {
   try {
     await ElMessageBox.confirm(`确定将选中的 ${fsBatchSelected.value.length} 条伏笔标记为已回收？`, '提示', { type: 'warning' })
     const ids = fsBatchSelected.value.map(c => c.id)
-    await batchUpdateForeshadowings(novelId.value, ids, { status: 'resolved', chapter_resolved: chapters.value.length })
+    await batchUpdateForeshadowings(novelId.value, ids, { status: 'resolved', chapter_resolved: maxChapterNum.value })
     ElMessage.success(`已标记 ${ids.length} 条伏笔为回收`)
     fsBatchSelected.value = []
     loadForeshadowings()
@@ -1200,7 +1498,7 @@ async function loadTimelines() {
 }
 
 function onAddTimeline() {
-  tlEditData.value = { chapter_num: chapters.value.length || 1, event: '', time_label: '' }
+  tlEditData.value = { chapter_num: maxChapterNum.value || 1, event: '', time_label: '' }
   showTlEditDialog.value = true
 }
 
@@ -1263,58 +1561,1115 @@ onMounted(fetchData)
 </script>
 
 <style scoped>
-.page-header {
+.novel-detail {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.back-link:hover {
+  color: var(--color-primary);
+  transform: translateX(-2px);
+}
+
+.novel-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: 146px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 32px;
+  margin-bottom: 22px;
+  padding: 28px 32px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-xl);
+  background:
+    radial-gradient(520px 280px at 88% 8%, rgba(204, 120, 92, 0.09), transparent 70%),
+    linear-gradient(140deg, #ffffff 0%, #f7f3eb 100%);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.novel-hero::after {
+  content: "";
+  position: absolute;
+  right: -90px;
+  bottom: -150px;
+  width: 300px;
+  height: 300px;
+  border: 1px solid rgba(204, 120, 92, 0.16);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.hero-cover {
+  position: relative;
+  width: 140px;
+  aspect-ratio: 2 / 3;
   display: flex;
   align-items: center;
-  margin-bottom: 16px;
+  justify-content: center;
+  border-radius: 3px 9px 9px 3px;
+  color: #f7f2e8;
+  box-shadow: 0 18px 32px rgba(37, 30, 23, 0.24);
+  overflow: hidden;
 }
 
-.tab-header {
+.hero-cover-spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 11px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.hero-cover-mark {
+  position: absolute;
+  top: 13px;
+  right: 14px;
+  font-size: 11px;
+  color: var(--cover-accent);
+  opacity: 0.85;
+}
+
+.hero-cover-initial {
+  font-family: var(--font-serif);
+  font-size: 56px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 3px 16px rgba(0, 0, 0, 0.2);
+}
+
+.hero-cover-foot {
+  position: absolute;
+  right: 13px;
+  bottom: 12px;
+  left: 20px;
   display: flex;
+  justify-content: space-between;
+  font-size: 7px;
+  letter-spacing: 1.3px;
+  color: rgba(255, 255, 255, 0.58);
+  text-transform: uppercase;
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
+.hero-title {
+  margin: 8px 0 10px;
+  font-family: var(--font-serif);
+  font-size: clamp(30px, 3.2vw, 42px);
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -1px;
+  color: var(--color-ink);
+}
+
+.hero-desc {
+  max-width: 620px;
+  margin: 0 0 20px;
+  color: var(--color-body);
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+
+.hero-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hero-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hero-stat strong {
+  font-family: var(--font-serif);
+  font-size: 21px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--color-ink);
+}
+
+.hero-stat span:last-child {
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+}
+
+.hero-stat-rule {
+  width: 1px;
+  height: 28px;
+  background: var(--color-hairline);
+}
+
+.hero-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  align-self: center;
+}
+
+.hero-primary {
+  box-shadow: 0 8px 18px rgba(204, 120, 92, 0.24);
+}
+
+/* 左侧工作台导航 */
+.studio-tabs {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-lg);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.studio-tabs :deep(.el-tabs__header.is-left) {
+  width: 186px;
+  margin: 0;
+  padding: 16px 10px;
+  background: #f2eee5;
+  border-right: 1px solid var(--color-hairline);
+  flex-shrink: 0;
+}
+
+.studio-tabs :deep(.el-tabs__nav-wrap.is-left)::after,
+.studio-tabs :deep(.el-tabs__active-bar) {
+  display: none;
+}
+
+.studio-tabs :deep(.el-tabs__nav.is-left) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.studio-tabs :deep(.el-tabs__item.is-left) {
+  height: 44px;
+  line-height: 44px;
+  justify-content: flex-start;
+  padding: 0 12px !important;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--color-muted);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.studio-tabs :deep(.el-tabs__item.is-left:hover) {
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.studio-tabs :deep(.el-tabs__item.is-left.is-active) {
+  color: var(--color-ink);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(37, 30, 23, 0.06), 0 0 0 1px rgba(37, 30, 23, 0.03);
+}
+
+.studio-tabs :deep(.el-tabs__content) {
+  padding: 26px 28px 30px;
+  overflow: visible;
+}
+
+.studio-tabs :deep(#tab-chapters) { order: 1; }
+.studio-tabs :deep(#tab-characters) { order: 2; }
+.studio-tabs :deep(#tab-outline) { order: 3; }
+.studio-tabs :deep(#tab-memory) { order: 4; }
+.studio-tabs :deep(#tab-foreshadowing) { order: 5; }
+.studio-tabs :deep(#tab-timeline) { order: 6; }
+.studio-tabs :deep(#tab-fulltext) { order: 7; }
+.studio-tabs :deep(#tab-info) { order: 8; }
+
+.studio-tab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+}
+
+.studio-tab .el-icon {
+  font-size: 15px;
+  opacity: 0.72;
+}
+
+.studio-tab-count {
+  margin-left: auto;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(41, 40, 37, 0.06);
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.studio-tab-count.accent {
+  background: rgba(204, 120, 92, 0.14);
+  color: var(--color-primary);
+}
+
+.studio-tabs :deep(.el-tabs__item.is-active) .studio-tab-count {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+/* 面板通用 */
+.panel-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.panel-kicker {
+  margin: 0 0 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 1.8px;
+  color: var(--color-primary);
+}
+
+.panel-heading h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+  color: var(--color-ink);
+}
+
+.panel-sub {
+  margin: 6px 0 0;
+  color: var(--color-muted);
+  font-size: 12.5px;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panel-count {
+  color: var(--color-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.empty-note {
+  margin: 8px 0 20px;
+  padding: 30px 24px;
+  border: 1px dashed var(--color-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.metric-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 16px;
 }
 
-.write-section {
-  background: #f5f7fa;
-  padding: 16px;
-  border-radius: 8px;
-  margin-top: 16px;
+.metric {
+  min-width: 104px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric span {
+  font-size: 9.5px;
+  letter-spacing: 1px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+}
+
+.metric strong {
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--color-ink);
+}
+
+.metric.accent strong {
+  color: var(--color-primary);
+}
+
+.metric-batch {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.data-card {
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.data-card :deep(.el-table) {
+  --el-table-border-color: var(--color-hairline-soft);
+  --el-table-header-bg-color: #f6f3ec;
+  --el-table-row-hover-bg-color: #faf8f2;
+}
+
+.data-card :deep(.el-table th.el-table__cell) {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+}
+
+.data-card :deep(.el-table td.el-table__cell) {
+  font-size: 12.5px;
+  color: var(--color-body);
+}
+
+/* 章节 */
+.chapter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.chapter-card {
+  padding: 17px 18px 13px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+.chapter-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(204, 120, 92, 0.28);
+  box-shadow: 0 12px 26px rgba(37, 30, 23, 0.07);
+}
+
+.chapter-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.chapter-no {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  color: var(--color-primary);
+}
+
+.chapter-unaudited {
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.chapter-card h3 {
+  margin: 0 0 7px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--color-ink);
+}
+
+.chapter-excerpt {
+  min-height: 40px;
+  margin: 0 0 13px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chapter-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 9px;
+  border-top: 1px solid var(--color-hairline-soft);
+  color: var(--color-muted);
+  font-size: 10.5px;
+}
+
+.chapter-card-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+.chapter-card-actions button,
+.character-actions button {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.chapter-card-actions button:hover,
+.character-actions button:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+}
+
+.chapter-card-actions button.danger:hover,
+.character-actions button.danger:hover {
+  color: #b04a3a;
+}
+
+.write-studio {
+  position: relative;
+  margin-top: 26px;
+  padding: 22px 24px;
+  border: 1px solid rgba(204, 120, 92, 0.2);
+  border-radius: 14px;
+  background:
+    radial-gradient(380px 200px at 100% 0%, rgba(204, 120, 92, 0.08), transparent 70%),
+    #fbf8f2;
+  scroll-margin-top: 90px;
+  overflow: hidden;
+}
+
+.write-studio::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--color-primary);
+}
+
+.write-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.write-head h3 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: -0.3px;
+  color: var(--color-ink);
+}
+
+.write-hint {
+  color: var(--color-muted);
+  font-size: 10.5px;
+}
+
+.write-grid {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 0 18px;
+}
+
+.write-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.write-form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.write-form :deep(.el-form-item__label) {
+  padding-bottom: 4px;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.write-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.write-footnote {
+  margin-left: auto;
+  color: var(--color-muted);
+  font-family: var(--font-serif);
+  font-size: 11px;
+  font-style: italic;
 }
 
 .chapter-preview {
   margin-top: 20px;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-lg);
   overflow: hidden;
+  background: #ffffff;
+  box-shadow: var(--shadow-card);
 }
 
 .preview-header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  background: #f5f7fa;
-  border-bottom: 1px solid #e4e7ed;
-  font-size: 13px;
-  color: #606266;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .preview-content {
-  padding: 16px;
-  max-height: 400px;
+  max-height: 480px;
+  padding: 20px;
   overflow-y: auto;
-  white-space: pre-wrap;
-  line-height: 1.8;
+  color: var(--color-body);
   font-size: 14px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+}
+
+/* 角色 */
+.character-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.character-card {
+  padding: 18px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+}
+
+.character-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 26px rgba(37, 30, 23, 0.06);
+}
+
+.character-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+
+.character-avatar {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #2b2824;
+  color: #f5efe4;
+  font-family: var(--font-serif);
+  font-size: 18px;
+}
+
+.character-top h3 {
+  margin: 0 0 3px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.character-top p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.character-bg {
+  min-height: 40px;
+  margin: 0 0 11px;
+  color: var(--color-body);
+  font-size: 12px;
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.character-state {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 11px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+  font-size: 10.5px;
+}
+
+.character-state span {
+  color: var(--color-muted);
+}
+
+.character-state strong {
+  font-weight: 500;
+  color: var(--color-ink);
+  text-align: right;
+}
+
+.character-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+/* 大纲 */
+.outline-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.outline-side {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dark-note {
+  position: relative;
+  padding: 20px;
+  border-radius: 12px;
+  background: #292724;
+  color: #f0e9dc;
+  overflow: hidden;
+}
+
+.dark-note-mark {
+  color: #d99a72;
+  font-size: 17px;
+}
+
+.dark-note p {
+  margin: 12px 0 18px;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  line-height: 1.65;
+  color: #f6f1e7;
+}
+
+.dark-note > span:last-child {
+  font-size: 8.5px;
+  letter-spacing: 1.6px;
+  color: rgba(246, 241, 231, 0.42);
+}
+
+.field-label {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.outline-generate,
+.outline-regenerate {
+  width: 100%;
+  margin-left: 0 !important;
+}
+
+.outline-regenerate {
+  margin-top: 0 !important;
+}
+
+.outline-main {
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.outline-main-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+}
+
+.prose-input :deep(.el-textarea__inner) {
+  padding: 18px 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-body);
+  font-family: var(--font-serif);
+  font-size: 14.5px;
+  line-height: 1.95;
+  resize: vertical;
+}
+
+.prose-input :deep(.el-textarea__inner:focus) {
+  box-shadow: none;
+}
+
+.outline-save {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+/* 全文 */
+.review-card {
+  margin-bottom: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: var(--shadow-card);
+}
+
+.review-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.review-card-head h3 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--color-ink);
 }
 
 .review-content {
+  padding: 16px 18px;
+  border: 1px solid var(--color-hairline);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--rounded-md);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  font-size: 13.5px;
+  line-height: 1.85;
   white-space: pre-wrap;
-  line-height: 1.8;
-  font-size: 14px;
-  color: #303133;
-  background: #fdf6ec;
-  padding: 16px;
-  border-radius: 6px;
+}
+
+/* 设定 */
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 22px;
+  align-items: start;
+}
+
+.settings-form {
+  padding: 22px 24px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 0 16px;
+}
+
+.settings-form :deep(.el-form-item__label) {
+  padding-bottom: 5px;
+  color: var(--color-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.style-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0 8px;
+}
+
+.settings-save {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.settings-aside {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.meta-list {
+  margin: 0;
+  padding: 6px 18px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.meta-list div {
+  display: flex;
+  justify-content: space-between;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  font-size: 11.5px;
+}
+
+.meta-list div:last-child {
+  border-bottom: 0;
+}
+
+.meta-list dt {
+  color: var(--color-muted);
+}
+
+.meta-list dd {
+  margin: 0;
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+/* 响应式 */
+@media (max-width: 1100px) {
+  .novel-hero {
+    grid-template-columns: 132px minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .hero-cover {
+    width: 126px;
+  }
+
+  .hero-actions {
+    grid-column: 2;
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+
+  .character-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .outline-layout {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-aside {
+    position: static;
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .settings-aside .dark-note {
+    flex: 1;
+  }
+
+  .meta-list {
+    flex: 1;
+  }
+}
+
+@media (max-width: 860px) {
+  .studio-tabs {
+    display: block;
+  }
+
+  .studio-tabs :deep(.el-tabs__header.is-left) {
+    width: 100%;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-hairline);
+  }
+
+  .studio-tabs :deep(.el-tabs__nav.is-left) {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .studio-tabs :deep(.el-tabs__item.is-left) {
+    width: auto;
+    height: 36px;
+    line-height: 36px;
+    padding: 0 10px !important;
+  }
+
+  .studio-tab {
+    gap: 6px;
+  }
+
+  .studio-tab-count {
+    margin-left: 4px;
+  }
+
+  .studio-tabs :deep(.el-tabs__content) {
+    padding: 20px;
+  }
+
+  .panel-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .panel-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .novel-hero {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 20px;
+  }
+
+  .hero-cover {
+    width: 96px;
+  }
+
+  .hero-actions {
+    grid-column: auto;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-title {
+    font-size: 30px;
+  }
+
+  .chapter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .write-studio {
+    padding: 18px;
+  }
+
+  .write-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .write-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .write-grid .span-2 {
+    grid-column: auto;
+  }
+
+  .write-actions {
+    flex-wrap: wrap;
+  }
+
+  .write-footnote {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .character-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .outline-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .outline-side {
+    position: static;
+  }
+
+  .settings-aside {
+    flex-direction: column;
+  }
+
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .metric-batch {
+    margin-left: 0;
+  }
 }
 </style>

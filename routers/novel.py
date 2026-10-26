@@ -210,6 +210,56 @@ async def generate_outline(novel_id: int, req: dict = Body(default={}),
 
 # ============ 章节写作 ============
 
+def _save_chapter(db: Session, novel_id: int, chapter_num: int, *, title: str,
+                  content: str, summary: str, audit_result: dict,
+                  rewrite_count: int) -> Chapter:
+    chapter = db.query(Chapter).filter(
+        Chapter.novel_id == novel_id, Chapter.chapter_num == chapter_num
+    ).first()
+    if chapter is None:
+        chapter = Chapter(novel_id=novel_id, chapter_num=chapter_num)
+        db.add(chapter)
+    chapter.title = title
+    chapter.content = content
+    chapter.summary = summary
+    chapter.audit_score = audit_result["score"]
+    chapter.audit_result = json.dumps(audit_result, ensure_ascii=False)
+    chapter.rewrite_count = rewrite_count
+    db.flush()
+    return chapter
+
+
+def _save_chapter_memory(db: Session, novel_id: int, chapter_num: int,
+                         content: str) -> Memory:
+    memory = db.query(Memory).filter(
+        Memory.novel_id == novel_id, Memory.chapter_num == chapter_num
+    ).first()
+    if memory is None:
+        memory = Memory(novel_id=novel_id, chapter_num=chapter_num)
+        db.add(memory)
+    memory.content = content
+    db.flush()
+    return memory
+
+
+def _replace_chapter_metadata(db: Session, novel_id: int, chapter_num: int) -> None:
+    db.query(Foreshadowing).filter(
+        Foreshadowing.novel_id == novel_id,
+        Foreshadowing.chapter_planted == chapter_num,
+    ).delete(synchronize_session=False)
+    db.query(Timeline).filter(
+        Timeline.novel_id == novel_id,
+        Timeline.chapter_num == chapter_num,
+    ).delete(synchronize_session=False)
+    db.query(Foreshadowing).filter(
+        Foreshadowing.novel_id == novel_id,
+        Foreshadowing.chapter_resolved == chapter_num,
+    ).update(
+        {Foreshadowing.status: "pending", Foreshadowing.chapter_resolved: None},
+        synchronize_session=False,
+    )
+
+
 @router.post("/{novel_id}/chapters/generate")
 async def generate_chapter(novel_id: int, req: dict,
                            user: User = Depends(get_current_user),
@@ -303,26 +353,21 @@ async def generate_chapter(novel_id: int, req: dict,
 
     summary = await NovelEngine.summarize_chapter(content, chapter_num)
 
-    import json as _json
-    chapter = Chapter(
-        novel_id=novel.id,
-        chapter_num=chapter_num,
+    _replace_chapter_metadata(db, novel.id, chapter_num)
+    chapter = _save_chapter(
+        db, novel.id, chapter_num,
         title=title,
         content=content,
         summary=summary,
-        audit_score=audit_result["score"],
-        audit_result=_json.dumps(audit_result, ensure_ascii=False),
+        audit_result=audit_result,
         rewrite_count=rewrite_count,
     )
-    db.add(chapter)
-    db.commit()
-    db.refresh(chapter)
 
     # 按章节存储记忆
     new_memory = await NovelEngine.compress_memory(memory_text, content, chapter_num)
-    memory = Memory(novel_id=novel.id, chapter_num=chapter_num, content=new_memory)
-    db.add(memory)
+    _save_chapter_memory(db, novel.id, chapter_num, new_memory)
     db.commit()
+    db.refresh(chapter)
 
     # 伏笔追踪：扫描新伏笔 + 检查回收
     try:
@@ -497,25 +542,21 @@ async def stream_chapter(novel_id: int, req: dict,
                         yield f"data: {json.dumps({'type': 'rewrite_done', 'data': {'content': full_content, 'audit': audit_result}}, ensure_ascii=False)}\n\n"
 
                     summary = await NovelEngine.summarize_chapter(full_content, chapter_num)
-                    chapter = Chapter(
-                        novel_id=novel.id,
-                        chapter_num=chapter_num,
+                    _replace_chapter_metadata(db, novel.id, chapter_num)
+                    chapter = _save_chapter(
+                        db, novel.id, chapter_num,
                         title=title,
                         content=full_content,
                         summary=summary,
-                        audit_score=audit_result["score"],
-                        audit_result=json.dumps(audit_result, ensure_ascii=False),
+                        audit_result=audit_result,
                         rewrite_count=rewrite_count,
                     )
-                    db.add(chapter)
-                    db.commit()
-                    db.refresh(chapter)
 
                     # 按章节存储记忆
                     new_memory = await NovelEngine.compress_memory(memory_text, full_content, chapter_num)
-                    memory = Memory(novel_id=novel.id, chapter_num=chapter_num, content=new_memory)
-                    db.add(memory)
+                    _save_chapter_memory(db, novel.id, chapter_num, new_memory)
                     db.commit()
+                    db.refresh(chapter)
 
                     # 伏笔追踪：扫描新伏笔 + 检查回收
                     try:

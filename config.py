@@ -1,4 +1,7 @@
+import logging
 import os
+import secrets
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,8 +17,8 @@ LLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 # glm-4-air: 中间档，适合中等任务（审计、改写）
 COST_AWARE_MODELS = {
     "cheap": "glm-4-flash",      # 简单任务：角色提取、情绪分析、伏笔扫描
-    "medium": "glm-4-air",       # 中等任务：章节审计、文风分析
-    "premium": "glm-4",          # 复杂任务：正文生成、大纲规划
+    "medium": "glm-4-flash",     # 中等任务：章节审计、文风分析
+    "premium": "glm-4-flash",    # 复杂任务：正文生成、大纲规划（glm-4被限流，暂时用flash）
 }
 DEFAULT_TIER = "cheap"
 
@@ -54,6 +57,19 @@ DATABASE_URL = (
 )
 
 # ============ JWT 认证配置 ============
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "rag-kb-secret-key-change-in-production")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not JWT_SECRET_KEY:
+    JWT_SECRET_KEY = secrets.token_urlsafe(48)
+    logging.warning("JWT_SECRET_KEY 未配置，已生成临时密钥；服务重启后登录状态会失效")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 默认1天
+
+# ============ CORS 配置 ============
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",")
+    if origin.strip()
+]
