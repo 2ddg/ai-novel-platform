@@ -6,9 +6,9 @@
 
 > 截图位于 `screenshots/` 目录，可在仓库中直接查看。
 
-| 系统整体框架 | 登录页 |
+| 登录页（暖色编辑风） | 作者书架 |
 |:---:|:---:|
-| ![整体框架](screenshots/整体框架.png) | ![登录页](screenshots/login.png) |
+| ![登录页](screenshots/login.png) | ![作者书架](screenshots/shelf.png) |
 
 | AI 章节生成 | 伏笔追踪 |
 |:---:|:---:|
